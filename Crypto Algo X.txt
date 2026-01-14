@@ -1,0 +1,123 @@
+// This work is licensed under man Sharda trading International  
+// https://youtube.com/@mstrade07?si=IFTHQN4MrHrUg-8p
+// © Maa Sharda Trading - Modified to Strategy
+
+//@version=5
+strategy("Maa Sharda Trading [Long Only]", overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100)
+
+// ＩＮＰＵＴＳ ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+length = input.int(10, "Trend Length")
+
+// Strategy Settings
+start_year = input.int(2018, "Start Year", minval=2000, maxval=2030)
+start_month = input.int(1, "Start Month", minval=1, maxval=12)
+start_day = input.int(1, "Start Day", minval=1, maxval=31)
+end_year = input.int(2030, "End Year", minval=2000, maxval=2030)
+end_month = input.int(12, "End Month", minval=1, maxval=12)
+end_day = input.int(31, "End Day", minval=1, maxval=31)
+
+first_target_percent = input.float(1.0, "First Target %", minval=0.1, step=0.1)
+first_target_sell_percent = input.float(50.0, "Sell % at First Target", minval=1.0, maxval=100.0, step=1.0)
+
+// Date range
+start_date = timestamp(start_year, start_month, start_day)
+end_date = timestamp(end_year, end_month, end_day)
+in_date_range = time >= start_date and time <= end_date
+// }
+
+// ＶＡＲＩＡＢＬＥＳ ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+var bool trend    = na
+float trend_value = na
+
+// Colors
+color up_color = #06b690
+color dn_color = color.rgb(182, 112, 6)
+
+// ATR for calculating stop loss and target levels
+series float atr_value = ta.sma(ta.atr(200), 200) * 0.8
+
+// Moving averages for trend detection
+series float sma_high  = ta.sma(high, length) + atr_value
+series float sma_low   = ta.sma(low, length) - atr_value
+
+// Strategy variables
+var float entry_price = na
+var bool first_target_hit = false
+// }
+
+// ＣＡＬＣＵＬＡＴＩＯＮＳ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+  
+// Determine trend based on crossovers
+if ta.crossover(close, sma_high) and barstate.isconfirmed
+    trend := true
+if ta.crossunder(close, sma_low) and barstate.isconfirmed
+    trend := false
+
+trend_value := switch
+    trend     => sma_low
+    not trend => sma_high
+
+trend_color = trend ? up_color : not trend ? dn_color : na
+
+// Signal detection for trend changes
+bool signal_up   = ta.change(trend) and not trend[1]
+bool signal_down = ta.change(trend) and trend[1]
+
+// Strategy Logic
+if in_date_range
+    // Long Entry - when candles turn green (trend becomes true)
+    if signal_up and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+        entry_price := close
+        first_target_hit := false
+    
+    // First target calculation
+    first_target_price = entry_price * (1 + first_target_percent / 100)
+    
+    // Check if first target is hit
+    if strategy.position_size > 0 and not first_target_hit and high >= first_target_price
+        // Sell partial position at first target
+        strategy.close("Long", qty_percent = first_target_sell_percent)
+        first_target_hit := true
+        // Move stop to breakeven (entry price)
+        strategy.exit("Breakeven", "Long", stop = entry_price, qty_percent = 100 - first_target_sell_percent)
+    
+    // Exit conditions
+    if strategy.position_size > 0
+        // Exit when candles turn orange (trend becomes false) or price hits breakeven
+        if signal_down
+            strategy.close("Long")
+            first_target_hit := false
+        // Additional exit at breakeven if first target was hit (handled by strategy.exit above)
+
+// }
+
+// ＰＬＯＴ―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+// Plot candlesticks with trend color
+plotcandle(open, high, low, close,
+           title = 'Trend Candles', 
+           color = trend_color,
+           wickcolor = trend_color, 
+           bordercolor = trend_color)
+
+// Plot trailing stops
+plot_color = color.new(chart.fg_color, 80)
+p1 = plot(trend ? trend_value : na, style = plot.style_linebr, color = plot_color)
+p2 = plot(not trend ? trend_value : na, style = plot.style_linebr, color = plot_color)
+p0 = plot(hl2, display = display.none, editable = false)
+fill(p1, p0, trend_value, hl2, color.new(chart.fg_color, 90), na)
+fill(p2, p0, trend_value, hl2, color.new(chart.fg_color, 90), na)
+
+// Plot signals on the chart
+float sigUp = signal_up ? low - atr_value*2 : na
+float sigDn = signal_down ? high + atr_value*2 : na
+
+plotshape(sigUp,   "Long Signal", shape.triangleup, location.absolute, up_color, size = size.small)
+plotshape(sigDn, "Exit Signal", shape.triangledown, location.absolute, dn_color, size = size.small)
+
+// Plot entry price and first target
+plot(strategy.position_size > 0 ? entry_price : na, "Entry Price", color.blue, linewidth=1, style=plot.style_linebr)
+plot(strategy.position_size > 0 and not first_target_hit ? entry_price * (1 + first_target_percent / 100) : na, 
+     "First Target", color.green, linewidth=1, style=plot.style_linebr)
+
+// }

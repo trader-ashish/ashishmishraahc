@@ -1,0 +1,1085 @@
+// Special thanks to the TradingView community for their contributions and shared knowledge
+
+//@version=5
+const bool DEBUG = false
+const int maxBoxesCount = 500
+const float overlapThresholdPercentage = 0
+const int maxDistanceToLastBar = 750 // Affects Running Time
+const int maxOrderBlocks = 15
+const int atrLen = 10
+const float retestATRMult = 0.2
+
+indicator(title = 'Breaker Blocks + Supertrend Screener', overlay = true, max_boxes_count = maxBoxesCount, max_labels_count = maxBoxesCount, max_lines_count = maxBoxesCount, max_bars_back = 5000)
+
+// Supertrend Settings
+stPeriods = input.int(10, "Supertrend ATR Period", minval=1, group="Supertrend")
+stMultiplier = input.float(3.0, "Supertrend Multiplier", minval=0.1, step=0.1, group="Supertrend")
+stChangeATR = input.bool(true, "Change ATR Calculation Method", group="Supertrend")
+
+// Chandelier Exit Settings
+ceLength = input.int(22, title = 'Chandelier ATR Period', minval=1, group="Chandelier Exit")
+ceMult = input.float(3.0, step = 0.1, title = 'Chandelier ATR Multiplier', group="Chandelier Exit")
+ceUseClose = input.bool(true, title = 'Use Close Price for Extremums', group="Chandelier Exit")
+
+// Smart Money Breakout Settings
+smLength = input.int(100, title="Normalization Length", minval=1, group="Smart Money Breakout")
+smDetectionLength = input.int(14, "Box Detection Length", minval=1, group="Smart Money Breakout")
+smStrongCloses = input.bool(true, "Strong Closes Only", group="Smart Money Breakout")
+
+// Trendline Breakout Settings
+tlPeriod = input.int(10, title="Trendline Period", minval=1, group="Trendline Breakout")
+tlTrendtype = input.string("Wicks", "Trendline Type", options=["Wicks", "Body"], group="Trendline Breakout")
+
+
+tickersPreset = DEBUG ? input.string("Crypto", "", options = ["Crypto", "Stocks", "Forex", "Futures", "Custom"], inline = "a", group = "Tickers", display = display.none) : "Custom"
+overrideTF = DEBUG ? input.timeframe("", "", group = "Tickers", inline = "a", display = display.none) : ""
+
+warning = input.color(color.black, "Please only select timeframes >= than the current chart.", group = "Tickers", inline = "warning", display = display.none)
+
+ticker1EnabledCustom = input.bool(true, "", group = "Tickers", inline = "1", display = display.none)
+ticker1Custom = input.symbol("BINANCE:BTCUSDT", "1.", group = "Tickers", inline = "1", display = display.none)
+ticker1TFCustom = input.timeframe("", "", group = "Tickers", inline = "1", display = display.none)
+
+ticker2EnabledCustom = input.bool(true, "", group = "Tickers", inline = "2", display = display.none)
+ticker2Custom = input.symbol("BINANCE:ETHUSDT", "2.", group = "Tickers", inline = "2", display = display.none)
+ticker2TFCustom = input.timeframe("", "", group = "Tickers", inline = "2", display = display.none)
+
+ticker3EnabledCustom = input.bool(true, "", group = "Tickers", inline = "3", display = display.none)
+ticker3Custom = input.symbol("BINANCE:SOLUSDT", "3.", group = "Tickers", inline = "3", display = display.none)
+ticker3TFCustom = input.timeframe("", "", group = "Tickers", inline = "3", display = display.none)
+
+ticker4EnabledCustom = input.bool(true, "", group = "Tickers", inline = "4", display = display.none)
+ticker4Custom = input.symbol("BINANCE:DOGEUSDT", "4.", group = "Tickers", inline = "4", display = display.none)
+ticker4TFCustom = input.timeframe("", "", group = "Tickers", inline = "4", display = display.none)
+
+ticker5EnabledCustom = input.bool(true, "", group = "Tickers", inline = "5", display = display.none)
+ticker5Custom = input.symbol("BINANCE:BNBUSDT", "5.", group = "Tickers", inline = "5", display = display.none)
+ticker5TFCustom = input.timeframe("", "", group = "Tickers", inline = "5", display = display.none)
+
+maxATRMult = DEBUG ? input.float(3.5,"Max Atr Multiplier", group = "General Configuration") : 3.5
+obEndMethod = input.string("Close", "Order Block Invalidation", options = ["Wick", "Close"],  group = "General Configuration", display = display.none)
+bbEndMethod = input.string("Close", "Breaker Block Invalidation", options = ["Wick", "Close"],  group = "General Configuration", display = display.none)
+
+swingLength = input.int(10, 'Swing Length', minval = 3, tooltip="Swing length is used when finding order block formations. Smaller values will result in finding smaller order blocks.",group = "General Configuration", display = display.none)
+
+screenerPosition = input.string("Top Center", "Position", options = ["Top Right", "Top Center", "Right Center", "Middle Center", "Left Center", "Bottom Center"], group = "Style", display = display.none)
+fillBackgrounds = input.bool(true, "Fill Backgrounds", group = "Style", display = display.none)
+screenerColor = input.color(#1B1F2B, 'Background', group = 'Style', display = display.none)
+frameColor = input.color(color.rgb(255, 255, 255), 'Frame', group = 'Style', display = display.none)
+borderColor = input.color(color.rgb(255, 255, 255), 'Border', group = 'Style', display = display.none)
+textColor = input.color(color.white, 'Text', group = 'Style', display = display.none)
+bullishColor = input.color(#089981, 'Bullish', inline = 'obColor', group = 'Style', display = display.none)
+bearishColor = input.color(#ff5252, 'Bearish', inline = 'obColor', group = 'Style', display = display.none)
+
+
+bullishOrderBlocks = 10
+bearishOrderBlocks = 10
+
+atr = ta.atr(atrLen)
+
+// Supertrend Function
+calcSupertrend(src, periods, multiplier, changeATR) =>
+    atr2 = ta.sma(ta.tr, periods)
+    atrValue = changeATR ? ta.atr(periods) : atr2
+    up = src - (multiplier * atrValue)
+    up1 = nz(up[1], up)
+    up := close[1] > up1 ? math.max(up, up1) : up
+    dn = src + (multiplier * atrValue)
+    dn1 = nz(dn[1], dn)
+    dn := close[1] < dn1 ? math.min(dn, dn1) : dn
+    trend = 1
+    trend := nz(trend[1], trend)
+    trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
+    supertrendValue = trend == 1 ? up : dn
+    [trend, supertrendValue]
+
+// ===== CHANDELIER EXIT CALCULATION =====
+calcChandelierExit(int length, float mult, bool useClose) =>
+    atrCE = mult * ta.atr(length)
+    
+    highestClose = ta.highest(close, length)
+    highestHigh = ta.highest(length)
+    highestValue = useClose ? highestClose : highestHigh
+    longStop = highestValue - atrCE
+    longStopPrev = nz(longStop[1], longStop)
+    longStop := close[1] > longStopPrev ? math.max(longStop, longStopPrev) : longStop
+    
+    lowestClose = ta.lowest(close, length)
+    lowestLow = ta.lowest(length)
+    lowestValue = useClose ? lowestClose : lowestLow
+    shortStop = lowestValue + atrCE
+    shortStopPrev = nz(shortStop[1], shortStop)
+    shortStop := close[1] < shortStopPrev ? math.min(shortStop, shortStopPrev) : shortStop
+    
+    var int dir = 1
+    dir := close > shortStopPrev ? 1 : close < longStopPrev ? -1 : dir
+    
+    buySignal = dir == 1 and dir[1] == -1
+    sellSignal = dir == -1 and dir[1] == 1
+    
+    signal = dir == 1 ? "BUY" : "SELL"
+    
+    [dir, signal, longStop, shortStop]
+
+// ===== SMART MONEY BREAKOUT CALCULATION =====
+calcSmartMoneyBreakout(int normLength, int detectionLength, bool strongCloses) =>
+    // Exact AlgoAlpha implementation
+    lowestLow = ta.lowest(low, normLength)
+    highestHigh = ta.highest(high, normLength)
+    normalizedPrice = (close - lowestLow) / (highestHigh - lowestLow)
+    vol = ta.stdev(normalizedPrice, 14)
+    
+    upper = (ta.highestbars(vol, detectionLength + 1) + detectionLength) / detectionLength
+    lower = (ta.lowestbars(vol, detectionLength + 1) + detectionLength) / detectionLength
+    
+    duration = math.max(nz(ta.barssince(ta.crossover(lower, upper))), 1)
+    h = ta.highest(duration)
+    l = ta.lowest(duration)
+    
+    // Breakout detection variables
+    var string currentSignal = "BUY"  // Default to BUY, persist until changed
+    bullishBreakout = false
+    bearishBreakout = false
+    
+    // Channel formation and breakout logic (exact AlgoAlpha)
+    if ta.crossover(upper, lower) and duration > 10
+        // Channel formed, now check for breakouts
+        priceLevel = strongCloses ? math.avg(close, open) : close
+        
+        if priceLevel > h
+            bullishBreakout := true
+            currentSignal := "BUY"
+        else if priceLevel < l
+            bearishBreakout := true
+            currentSignal := "SELL"
+    
+    // Check existing channels for breakouts
+    if not (ta.crossover(upper, lower) and duration > 10)
+        priceLevel = strongCloses ? math.avg(close, open) : close
+        if priceLevel > h
+            bullishBreakout := true
+            currentSignal := "BUY"
+        else if priceLevel < l
+            bearishBreakout := true
+            currentSignal := "SELL"
+    
+    [currentSignal, bullishBreakout or bearishBreakout, h, l]
+
+// ===== TRENDLINE BREAKOUT CALCULATION =====
+calcTrendlineBreakout(int period, string trendType) =>
+    // Volume adjustment for trendline zones
+    volAdj = math.min(ta.atr(30) * 0.3, close * (0.3/100)) / 2
+    
+    // Determine source based on trend type
+    trendTypeWicks = trendType == "Wicks"
+    phSource = trendTypeWicks ? high : (close > open ? close : open)
+    plSource = trendTypeWicks ? low : (close > open ? open : close)
+    
+    // Pivot highs and lows
+    PH = ta.pivothigh(phSource, period, period / 2)
+    PL = ta.pivotlow(plSource, period, period / 2)
+    
+    // Persistent signal tracking
+    var string currentTLSignal = "BUY"
+    var bool longSignal = false
+    var bool shortSignal = false
+    
+    // Trendline slope calculations
+    var float updatedSLP = 0.0
+    var float updatedSLPLow = 0.0
+    var int updatedX = 0
+    var float updatedY = 0.0
+    var int updatedXLow = 0
+    var float updatedYLow = 0.0
+    
+    // Update trendline data on pivot changes
+    if ta.change(fixnan(PH)) != 0
+        updatedX := time[period / 2]
+        updatedY := fixnan(PH)[1]
+        updatedSLP := (fixnan(PH) - updatedY) / (time - updatedX)
+    
+    if ta.change(fixnan(PL)) != 0
+        updatedXLow := time[period / 2]
+        updatedYLow := fixnan(PL)[1]
+        updatedSLPLow := (fixnan(PL) - updatedYLow) / (time - updatedXLow)
+    
+    // Check for breakouts
+    if not na(updatedSLP) and updatedSLP * time <= 0
+        currentPrice = updatedY + (time - updatedX) * updatedSLP
+        previousPrice = updatedY + (time[1] - updatedX) * updatedSLP
+        if close[1] < previousPrice and close > currentPrice
+            longSignal := true
+            currentTLSignal := "BUY"
+    
+    if not na(updatedSLPLow) and updatedSLPLow * time >= 0
+        currentPriceLow = updatedYLow + (time - updatedXLow) * updatedSLPLow
+        previousPriceLow = updatedYLow + (time[1] - updatedXLow) * updatedSLPLow
+        if close[1] > previousPriceLow - (volAdj * 0.1) and close < currentPriceLow - (volAdj * 0.1)
+            shortSignal := true
+            currentTLSignal := "SELL"
+    
+    [currentTLSignal, longSignal or shortSignal]
+
+getPosition (positionText) =>
+    if positionText == "Top Right"
+        position.top_right
+    else if positionText == "Top Center"
+        position.top_center
+    else if positionText == "Right Center"
+        position.middle_right
+    else if positionText == "Left Center"
+        position.middle_left
+    else if positionText == "Bottom Center"
+        position.bottom_center
+    else if positionText == "Middle Center"
+        position.middle_center
+
+var table screener = table.new(getPosition(screenerPosition), 10, 10, bgcolor = screenerColor, frame_width = 2, frame_color = frameColor, border_width = 1, border_color = borderColor)
+
+// Enhanced breakout detection with persistent signals
+// calcSmartMoneyBreakout(int normLength, int detectionLength, bool strongCloses) =>
+//     // Normalization for price analysis
+//     lowestLow = ta.lowest(low, normLength)
+//     highestHigh = ta.highest(high, normLength)
+//     normalizedPrice = (close - lowestLow) / (highestHigh - lowestLow)
+//     vol = ta.stdev(normalizedPrice, 14)
+    
+//     // Smart Money Channel Detection Algorithm
+//     upper = (ta.highestbars(vol, detectionLength + 1) + detectionLength) / detectionLength
+//     lower = (ta.lowestbars(vol, detectionLength + 1) + detectionLength) / detectionLength
+    
+//     duration = math.max(nz(ta.barssince(ta.crossover(lower, upper))), 1)
+//     h = ta.highest(duration)
+//     l = ta.lowest(duration)
+    
+//     // Enhanced breakout detection with persistent signals
+//     var float channelTop = na
+//     var float channelBottom = na
+//     var bool channelActive = false
+//     var string lastBreakout = "BUY"  // Default to BUY trend
+    
+//     // Channel formation detection
+//     if ta.crossover(upper, lower) and duration > 10
+//         channelTop := h
+//         channelBottom := l
+//         channelActive := true
+    
+//     // Smart Money breakout logic - always BUY or SELL
+//     priceLevel = strongCloses ? math.avg(close, open) : close
+//     breakoutSignal = lastBreakout  // Maintain last signal
+    
+//     if channelActive and not na(channelTop) and not na(channelBottom)
+//         if priceLevel > channelTop
+//             breakoutSignal := "BUY"
+//             lastBreakout := "BUY"
+//             channelActive := false
+//         else if priceLevel < channelBottom
+//             breakoutSignal := "SELL"
+//             lastBreakout := "SELL"
+//             channelActive := false
+//     else
+//         // When no active channel, use price momentum for trend
+//         breakoutSignal := close > close[1] ? "BUY" : "SELL"
+    
+//     [breakoutSignal, channelActive, channelTop, channelBottom]
+
+type orderBlockInfo
+    float top
+    float bottom
+    float obVolume
+    string obType
+    int startTime
+    float bbVolume
+    float obLowVolume
+    float obHighVolume
+    bool breaker
+    int breakTime
+    string timeframeStr
+    bool disabled = false
+    string combinedTimeframesStr = na
+    bool combined = false
+    int bbRetests = 0
+
+type tickerInfo
+    int index = na
+    string symbol
+    string timeframeStr = na
+    bool isEnabled = false
+
+    orderBlockInfo[] bullishOrderBlocksList = na
+    orderBlockInfo[] bearishOrderBlocksList = na
+    float closeF
+    float atrF
+    int trendDirection = 0  // 1 = uptrend, -1 = downtrend, 0 = neutral
+    float supertrendValue = na
+    // Chandelier Exit data
+    string chandelierSignal = na
+    int chandelierDirection = 0
+    // Smart Money Breakout data
+    string breakoutSignal = na
+    bool channelActive = false
+    // Trendline Breakout data
+    string trendlineSignal = na
+    bool trendlineActive = false
+
+type obSwing
+    int x = na    
+    float y = na
+    float swingVolume = na
+    bool crossed = false
+
+// ____ TYPES END ____
+
+ticker1 = ""
+ticker1TF = overrideTF
+ticker1Enabled = true
+
+ticker2 = ""
+ticker2TF = overrideTF
+ticker2Enabled = true
+
+ticker3 = ""
+ticker3TF = overrideTF
+ticker3Enabled = true
+
+ticker4 = ""
+ticker4TF = overrideTF
+ticker4Enabled = true
+
+ticker5 = ""
+ticker5TF = overrideTF
+ticker5Enabled = true
+
+if tickersPreset == "Crypto"
+    ticker1 := "BINANCE:BTCUSDT"
+    ticker2 := "BINANCE:ETHUSDT"
+    ticker3 := "BINANCE:SOLUSDT"
+    ticker4 := "BINANCE:XRPUSDT"
+    ticker5 := "BINANCE:ADAUSDT"
+else if tickersPreset == "Stocks"
+    ticker1 := "NASDAQ:AAPL"
+    ticker2 := "NASDAQ:TSLA"
+    ticker3 := "NASDAQ:NVDA"
+    ticker4 := "PYTH:SPY"
+    ticker5 := "NASDAQ:QQQ"
+else if tickersPreset == "Forex"
+    ticker1 := "OANDA:EURUSD"
+    ticker2 := "OANDA:GBPUSD"
+    ticker3 := "OANDA:USDJPY"
+    ticker4 := "OANDA:GBPJPY"
+    ticker5 := "OANDA:AUDUSD"
+else if tickersPreset == "Futures"
+    ticker1 := "CME_MINI:ES1!"
+    ticker2 := "CME_MINI:NQ1!"
+    ticker3 := "NYMEX:CL1!"
+    ticker4 := "COMEX:GC1!"
+    ticker5 := "CBOT_MINI:YM1!"
+if tickersPreset == "Custom"
+    ticker1 := ticker1Custom
+    ticker1TF := ticker1TFCustom
+    ticker1Enabled := ticker1EnabledCustom
+
+    ticker2 := ticker2Custom
+    ticker2TF := ticker2TFCustom
+    ticker2Enabled := ticker2EnabledCustom
+
+    ticker3 := ticker3Custom
+    ticker3TF := ticker3TFCustom
+    ticker3Enabled := ticker3EnabledCustom
+
+    ticker4 := ticker4Custom
+    ticker4TF := ticker4TFCustom
+    ticker4Enabled := ticker4EnabledCustom
+
+    ticker5 := ticker5Custom
+    ticker5TF := ticker5TFCustom
+    ticker5Enabled := ticker5EnabledCustom
+
+var tickerInfo[] tickerInfos = array.from(tickerInfo.new(1, ticker1, ticker1TF, ticker1Enabled), tickerInfo.new(2, ticker2, ticker2TF, ticker2Enabled), tickerInfo.new(3, ticker3, ticker3TF, ticker3Enabled), tickerInfo.new(4, ticker4, ticker4TF, ticker4Enabled), tickerInfo.new(5, ticker5, ticker5TF, ticker5Enabled))
+var bullishOrderBlocksList = array.new<orderBlockInfo>(0)
+var bearishOrderBlocksList = array.new<orderBlockInfo>(0)
+
+moveLine(_line, _x, _y, _x2) =>
+    line.set_xy1(_line, _x,  _y)
+    line.set_xy2(_line, _x2, _y)
+
+moveBox (_box, _topLeftX, _topLeftY, _bottomRightX, _bottomRightY) =>
+    box.set_lefttop(_box, _topLeftX, _topLeftY)
+    box.set_rightbottom(_box, _bottomRightX, _bottomRightY)
+
+isTimeframeLower (timeframe1F, timeframe2F) =>
+    timeframe.in_seconds(timeframe1F) < timeframe.in_seconds(timeframe2F)
+
+getMinTimeframe (timeframe1F, timeframe2F) =>
+    if isTimeframeLower(timeframe1F, timeframe2F)
+        timeframe1F
+    else
+        timeframe2F
+
+getMaxTimeframe (timeframe1F, timeframe2F) =>
+    if isTimeframeLower(timeframe1F, timeframe2F)
+        timeframe2F
+    else
+        timeframe1F
+
+formatTimeframeString (formatTimeframe) =>
+    timeframeF = formatTimeframe == "" ? timeframe.period : formatTimeframe
+    
+    if str.contains(timeframeF, "D") or str.contains(timeframeF, "W") or str.contains(timeframeF, "S") or str.contains(timeframeF, "M")
+        timeframeF
+    else
+        seconds = timeframe.in_seconds(timeframeF)
+        if seconds >= 3600
+            hourCount = int(seconds / 3600)
+            str.tostring(hourCount) + " Hour" + (hourCount > 1 ? "s" : "")
+        else
+            timeframeF + " Min"
+
+betterCross(s1, s2) =>
+    string ret = na
+    if s1 >= s2 and s1[1] < s2
+        ret := "Bull"
+    if s1 < s2 and s1[1] >= s2
+        ret := "Bear"
+    ret
+
+findOBSwings(len) =>
+    var swingType = 0
+    var obSwing top = obSwing.new(na, na)
+    var obSwing bottom = obSwing.new(na, na)
+    
+    upper = ta.highest(len)
+    lower = ta.lowest(len)
+
+    swingType := high[len] > upper ? 0 : low[len] < lower ? 1 : swingType
+
+    if swingType == 0 and swingType[1] != 0
+        top := obSwing.new(bar_index[len], high[len], volume[len])
+    
+    if swingType == 1 and swingType[1] != 1
+        bottom := obSwing.new(bar_index[len], low[len], volume[len])
+
+    [top, bottom]
+
+getTFData (tickerInfo tickerInfoF, string symbolF, string timeframeF) =>
+    [trendDir, stValue] = calcSupertrend(hl2, stPeriods, stMultiplier, stChangeATR)
+    [ceDir, ceSignal, ceLongStop, ceShortStop] = calcChandelierExit(ceLength, ceMult, ceUseClose)
+    [smSignal, smChannelActive, smTop, smBottom] = calcSmartMoneyBreakout(smLength, smDetectionLength, smStrongCloses)
+    [tlSignal, tlActive] = calcTrendlineBreakout(tlPeriod, tlTrendtype)
+    [bullishOrderBlocksListF, bearishOrderBlocksListF, closeF, atrF, trendDirF, stValueF, ceDirF, ceSignalF, smSignalF, smActiveF, tlSignalF, tlActiveF] = request.security(symbolF, timeframeF, [bullishOrderBlocksList, bearishOrderBlocksList, close, atr, trendDir, stValue, ceDir, ceSignal, smSignal, smChannelActive, tlSignal, tlActive])
+    [bullishOrderBlocksListF, bearishOrderBlocksListF, closeF, atrF, trendDirF, stValueF, ceDirF, ceSignalF, smSignalF, smActiveF, tlSignalF, tlActiveF]
+
+//#region Find Order Blocks
+[top, btm] = findOBSwings(swingLength)
+if bar_index > last_bar_index - maxDistanceToLastBar and barstate.isconfirmed
+    useBody = false
+    max = useBody ? math.max(close, open) : high
+    min = useBody ? math.min(close, open) : low
+
+    // Bullish Order Block
+
+    if bullishOrderBlocksList.size() > 0
+        for i = bullishOrderBlocksList.size() - 1 to 0
+            currentOB = bullishOrderBlocksList.get(i)
+            if not currentOB.breaker
+                // Invalidation
+                if (obEndMethod == "Wick" ? low : math.min(open, close)) < currentOB.bottom
+                    currentOB.breaker := true
+                    currentOB.breakTime := time
+                    currentOB.bbVolume := volume
+
+            else
+                if (bbEndMethod == "Wick" ? high : close) > currentOB.top
+                    bullishOrderBlocksList.remove(i)
+                else // Retest
+                    minDiff = math.min(math.abs(high - currentOB.top), math.abs(math.max(open, close) - currentOB.top))
+                    if minDiff <= atr * retestATRMult
+                        currentOB.bbRetests += 1
+                    
+
+    if close > top.y and not top.crossed
+        top.crossed := true
+
+        boxBtm = max[1]
+        boxTop = min[1]
+        boxLoc = time[1]
+
+        for i = 1 to (bar_index - top.x) - 1
+            boxBtm := math.min(min[i], boxBtm)
+            boxTop := boxBtm == min[i] ? max[i] : boxTop
+            boxLoc := boxBtm == min[i] ? time[i] : boxLoc
+
+        newOrderBlockInfo = orderBlockInfo.new(boxTop, boxBtm, volume + volume[1] + volume[2], "Bull", boxLoc)
+        newOrderBlockInfo.obLowVolume := volume[2]
+        newOrderBlockInfo.obHighVolume := volume + volume[1]
+        obSize = math.abs(newOrderBlockInfo.top - newOrderBlockInfo.bottom)
+        if obSize <= atr * maxATRMult
+            bullishOrderBlocksList.unshift(newOrderBlockInfo)
+            if bullishOrderBlocksList.size() > maxOrderBlocks
+                bullishOrderBlocksList.pop()
+
+    // Bearish Order Block
+
+    if bearishOrderBlocksList.size() > 0
+        for i = bearishOrderBlocksList.size() - 1 to 0
+            currentOB = bearishOrderBlocksList.get(i)
+
+            if not currentOB.breaker
+                // Invalidation
+                if (obEndMethod == "Wick" ? high : math.max(open, close)) > currentOB.top
+                    currentOB.breaker := true
+                    currentOB.breakTime := time
+                    currentOB.bbVolume := volume
+            else
+                if (bbEndMethod == "Wick" ? low : close) < currentOB.bottom
+                    bearishOrderBlocksList.remove(i)
+                else // Retest
+                    minDiff = math.min(math.abs(low - currentOB.bottom), math.abs(math.min(open, close) - currentOB.bottom))
+                    if minDiff <= atr * retestATRMult
+                        currentOB.bbRetests += 1
+
+    if close < btm.y and not btm.crossed
+        btm.crossed := true
+
+        boxBtm = min[1]
+        boxTop = max[1]
+        boxLoc = time[1]
+
+        for i = 1 to (bar_index - btm.x) - 1
+            boxTop := math.max(max[i], boxTop)
+            boxBtm := boxTop == max[i] ? min[i] : boxBtm
+            boxLoc := boxTop == max[i] ? time[i] : boxLoc
+
+        newOrderBlockInfo = orderBlockInfo.new(boxTop, boxBtm, volume + volume[1] + volume[2], "Bear", boxLoc)
+        newOrderBlockInfo.obLowVolume := volume + volume[1]
+        newOrderBlockInfo.obHighVolume := volume[2]
+        obSize = math.abs(newOrderBlockInfo.top - newOrderBlockInfo.bottom)
+        if obSize <= atr * maxATRMult
+            bearishOrderBlocksList.unshift(newOrderBlockInfo)
+            if bearishOrderBlocksList.size() > maxOrderBlocks
+                bearishOrderBlocksList.pop()
+
+[bullishOrderBlocksListTicker1, bearishOrderBlocksListTicker1, closeTicker1, atrTicker1, trendTicker1, stTicker1, ceDirTicker1, ceSignalTicker1, smSignalTicker1, smActiveTicker1, tlSignalTicker1, tlActiveTicker1] = getTFData(tickerInfos.get(0), ticker1, ticker1TF)
+tickerInfo1 = tickerInfos.get(0)
+tickerInfo1.bullishOrderBlocksList := bullishOrderBlocksListTicker1
+tickerInfo1.bearishOrderBlocksList := bearishOrderBlocksListTicker1
+tickerInfo1.closeF := closeTicker1
+tickerInfo1.atrF := atrTicker1
+tickerInfo1.trendDirection := trendTicker1
+tickerInfo1.supertrendValue := stTicker1
+tickerInfo1.chandelierDirection := ceDirTicker1
+tickerInfo1.chandelierSignal := ceSignalTicker1
+tickerInfo1.breakoutSignal := smSignalTicker1
+tickerInfo1.channelActive := smActiveTicker1
+tickerInfo1.trendlineSignal := tlSignalTicker1
+tickerInfo1.trendlineActive := tlActiveTicker1
+
+[bullishOrderBlocksListTicker2, bearishOrderBlocksListTicker2, closeTicker2, atrTicker2, trendTicker2, stTicker2, ceDirTicker2, ceSignalTicker2, smSignalTicker2, smActiveTicker2, tlSignalTicker2, tlActiveTicker2] = getTFData(tickerInfos.get(1), ticker2, ticker2TF)
+tickerInfo2 = tickerInfos.get(1)
+tickerInfo2.bullishOrderBlocksList := bullishOrderBlocksListTicker2
+tickerInfo2.bearishOrderBlocksList := bearishOrderBlocksListTicker2
+tickerInfo2.closeF := closeTicker2
+tickerInfo2.atrF := atrTicker2
+tickerInfo2.trendDirection := trendTicker2
+tickerInfo2.supertrendValue := stTicker2
+tickerInfo2.chandelierDirection := ceDirTicker2
+tickerInfo2.chandelierSignal := ceSignalTicker2
+tickerInfo2.breakoutSignal := smSignalTicker2
+tickerInfo2.channelActive := smActiveTicker2
+tickerInfo2.trendlineSignal := tlSignalTicker2
+tickerInfo2.trendlineActive := tlActiveTicker2
+
+[bullishOrderBlocksListTicker3, bearishOrderBlocksListTicker3, closeTicker3, atrTicker3, trendTicker3, stTicker3, ceDirTicker3, ceSignalTicker3, smSignalTicker3, smActiveTicker3, tlSignalTicker3, tlActiveTicker3] = getTFData(tickerInfos.get(2), ticker3, ticker3TF)
+tickerInfo3 = tickerInfos.get(2)
+tickerInfo3.bullishOrderBlocksList := bullishOrderBlocksListTicker3
+tickerInfo3.bearishOrderBlocksList := bearishOrderBlocksListTicker3
+tickerInfo3.closeF := closeTicker3
+tickerInfo3.atrF := atrTicker3
+tickerInfo3.trendDirection := trendTicker3
+tickerInfo3.supertrendValue := stTicker3
+tickerInfo3.chandelierDirection := ceDirTicker3
+tickerInfo3.chandelierSignal := ceSignalTicker3
+tickerInfo3.breakoutSignal := smSignalTicker3
+tickerInfo3.channelActive := smActiveTicker3
+tickerInfo3.trendlineSignal := tlSignalTicker3
+tickerInfo3.trendlineActive := tlActiveTicker3
+
+[bullishOrderBlocksListTicker4, bearishOrderBlocksListTicker4, closeTicker4, atrTicker4, trendTicker4, stTicker4, ceDirTicker4, ceSignalTicker4, smSignalTicker4, smActiveTicker4, tlSignalTicker4, tlActiveTicker4] = getTFData(tickerInfos.get(3), ticker4, ticker4TF)
+tickerInfo4 = tickerInfos.get(3)
+tickerInfo4.bullishOrderBlocksList := bullishOrderBlocksListTicker4
+tickerInfo4.bearishOrderBlocksList := bearishOrderBlocksListTicker4
+tickerInfo4.closeF := closeTicker4
+tickerInfo4.atrF := atrTicker4
+tickerInfo4.trendDirection := trendTicker4
+tickerInfo4.supertrendValue := stTicker4
+tickerInfo4.chandelierDirection := ceDirTicker4
+tickerInfo4.chandelierSignal := ceSignalTicker4
+tickerInfo4.breakoutSignal := smSignalTicker4
+tickerInfo4.channelActive := smActiveTicker4
+tickerInfo4.trendlineSignal := tlSignalTicker4
+tickerInfo4.trendlineActive := tlActiveTicker4
+
+[bullishOrderBlocksListTicker5, bearishOrderBlocksListTicker5, closeTicker5, atrTicker5, trendTicker5, stTicker5, ceDirTicker5, ceSignalTicker5, smSignalTicker5, smActiveTicker5, tlSignalTicker5, tlActiveTicker5] = getTFData(tickerInfos.get(4), ticker5, ticker5TF)
+tickerInfo5 = tickerInfos.get(4)
+tickerInfo5.bullishOrderBlocksList := bullishOrderBlocksListTicker5
+tickerInfo5.bearishOrderBlocksList := bearishOrderBlocksListTicker5
+tickerInfo5.closeF := closeTicker5
+tickerInfo5.atrF := atrTicker5
+tickerInfo5.trendDirection := trendTicker5
+tickerInfo5.supertrendValue := stTicker5
+tickerInfo5.chandelierDirection := ceDirTicker5
+tickerInfo5.chandelierSignal := ceSignalTicker5
+tickerInfo5.breakoutSignal := smSignalTicker5
+tickerInfo5.channelActive := smActiveTicker5
+tickerInfo5.trendlineSignal := tlSignalTicker5
+tickerInfo5.trendlineActive := tlActiveTicker5
+
+handleDashboard () =>
+    // Header
+    colCount = 8
+    table.merge_cells(screener,0,0,colCount,0)
+    table.cell(screener, 0, 0, "Breaker Blocks + Chandelier + Smart Money + Trendline Screener", text_color = textColor, bgcolor = screenerColor)
+
+    // Legend
+    table.cell(screener, 0, 1, "Symbol", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 1, 1, "Trend", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 2, 1, "Timeframe", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 3, 1, "Breaker Block", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 4, 1, "Status", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 5, 1, "Retests", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 6, 1, "Volume", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 7, 1, "Chandelier", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 8, 1, "Smart Money", text_color = textColor, bgcolor = screenerColor)
+    table.cell(screener, 9, 1, "Trendline", text_color = textColor, bgcolor = screenerColor)
+
+    // Tickers
+    tickerStart = 2
+    i = 0
+    for a = 0 to tickerInfos.size() - 1
+        curTickerInfo = tickerInfos.get(a)
+        if curTickerInfo.isEnabled == false
+            continue
+        orderBlockInfo latestOB = na
+        if not na(curTickerInfo.bullishOrderBlocksList)
+            if curTickerInfo.bullishOrderBlocksList.size() > 0
+                for j = 0 to curTickerInfo.bullishOrderBlocksList.size() - 1
+                    curOB = curTickerInfo.bullishOrderBlocksList.get(j)
+                    if na(curOB.breakTime)
+                        continue
+                    latestOB := curOB
+                    break
+        
+        if not na(curTickerInfo.bearishOrderBlocksList)
+            if curTickerInfo.bearishOrderBlocksList.size() > 0
+                for j = 0 to curTickerInfo.bearishOrderBlocksList.size() - 1
+                    curOB = curTickerInfo.bearishOrderBlocksList.get(j)
+                    if na(curOB.breakTime)
+                        continue
+                    if na(latestOB)
+                        latestOB := curOB
+                        break
+                    else
+                        if latestOB.startTime < curOB.startTime
+                            latestOB := curOB
+                            break
+
+        orderBlock = "None"
+        status = "None"
+        trendText = curTickerInfo.trendDirection == 1 ? "🟢 UP" : curTickerInfo.trendDirection == -1 ? "🔴 DOWN" : "⚪ FLAT"
+        trendColor = curTickerInfo.trendDirection == 1 ? bullishColor : curTickerInfo.trendDirection == -1 ? bearishColor : screenerColor
+        
+        // Chandelier Exit signal formatting - only BUY or SELL
+        chandelierText = curTickerInfo.chandelierSignal == "BUY" ? "🟢 BUY" : "🔴 SELL"
+        chandelierColor = curTickerInfo.chandelierSignal == "BUY" ? bullishColor : bearishColor
+        
+        // Smart Money Breakout signal formatting - only BUY or SELL
+        smartMoneyText = curTickerInfo.breakoutSignal == "BUY" ? "🟢 BUY" : "🔴 SELL"
+        smartMoneyColor = curTickerInfo.breakoutSignal == "BUY" ? bullishColor : bearishColor
+        
+        // Trendline Breakout signal formatting - only BUY or SELL
+        trendlineText = curTickerInfo.trendlineSignal == "BUY" ? "🟢 BUY" : "🔴 SELL"
+        trendlineColor = curTickerInfo.trendlineSignal == "BUY" ? bullishColor : bearishColor
+        
+        // Enhanced signal logic - only show breaker blocks that align with trend
+        if not na(latestOB)
+            isBullishBlock = latestOB.obType == "Bear"  // Bear OB becomes bullish breaker
+            isBearishBlock = latestOB.obType == "Bull"  // Bull OB becomes bearish breaker
+            
+            // Trend confirmation logic
+            trendAligned = (isBullishBlock and curTickerInfo.trendDirection == 1) or (isBearishBlock and curTickerInfo.trendDirection == -1)
+            
+            orderBlock := (isBullishBlock ? "Bullish 🟢" : "Bearish 🔴") + (trendAligned ? " ✓" : " ⚠️")
+            
+            if curTickerInfo.closeF >= latestOB.bottom and curTickerInfo.closeF <= latestOB.top
+                status := "Inside"
+            else if math.min(math.abs(curTickerInfo.closeF - latestOB.bottom), math.abs(curTickerInfo.closeF - latestOB.top)) <= curTickerInfo.atrF
+                status := "Approaching " + (curTickerInfo.closeF <= latestOB.bottom ? "⬆️" : "⬇️")
+            else
+                status := "Far"
+        
+        fillColor = fillBackgrounds ? ((str.contains(orderBlock, "Bullish")) ? bullishColor : (str.contains(orderBlock, "Bearish")) ? bearishColor : screenerColor) : screenerColor
+        table.cell(screener, 0, tickerStart + i, syminfo.ticker(curTickerInfo.symbol), text_color = textColor, bgcolor = screenerColor)
+        table.cell(screener, 1, tickerStart + i, trendText, text_color = textColor, bgcolor = trendColor)
+        table.cell(screener, 2, tickerStart + i, str.tostring(formatTimeframeString(curTickerInfo.timeframeStr)) + " 🕒", text_color = textColor, bgcolor = fillColor)
+        table.cell(screener, 3, tickerStart + i, orderBlock, text_color = textColor, bgcolor = fillColor)
+        table.cell(screener, 4, tickerStart + i, status, text_color = textColor, bgcolor = fillColor)
+        table.cell(screener, 5, tickerStart + i, na(latestOB) ? "None" : latestOB.bbRetests == 0 ? "None" : str.tostring(latestOB.bbRetests), text_color = textColor, bgcolor = fillColor)
+        table.cell(screener, 6, tickerStart + i, na(latestOB) ? "None" : (str.tostring(latestOB.bbVolume, format.volume)) == "NaN" ? "None" : str.tostring(latestOB.bbVolume, format.volume), text_color = textColor, bgcolor = fillColor)
+        table.cell(screener, 7, tickerStart + i, chandelierText, text_color = textColor, bgcolor = chandelierColor)
+        table.cell(screener, 8, tickerStart + i, smartMoneyText, text_color = textColor, bgcolor = smartMoneyColor)
+        table.cell(screener, 9, tickerStart + i, trendlineText, text_color = textColor, bgcolor = trendlineColor)
+        i += 1
+
+// ===== WAVE CONSOLIDATION VISUALS =====
+// Wave Consolidation settings
+sTog = input.bool(true, title = "Display Structure", group = "Wave Consolidation")
+waveLen = input.int(5, minval = 1, title = "Structure Length", group = "Wave Consolidation")
+vp = input.bool(false, title = "Volume Based Calculations", group = "Wave Consolidation")
+count = input.int(3, minval = 1, title = "Display Count", group = "Wave Consolidation")
+multi = input.float(0, minval = 0, maxval = 4, step = 0.25, title = "Multiplier", group = "Wave Consolidation")
+bullColor = input.color(color.new(#089981,50), title = "Bull Zone Color", group = "Wave Consolidation")
+bearColor = input.color(color.new(#f23645,50), title = "Bear Zone Color", group = "Wave Consolidation")
+midTog = input.bool(true, title = "Display Average Lines", group = "Wave Consolidation")
+
+// UDTs for Wave Consolidation
+type bar_data
+    float h
+    float l
+    float v
+    int bi
+
+type zones
+    float top
+    box bx
+    line ln
+    int dir
+    int mod
+
+// Helper functions
+fz(_val) => _val > 0 ? _val : 1
+round_to(_round,_to) => math.round(_round/_to)*_to
+
+// Chart Data
+var chart_data = array.new<bar_data>(na)
+chart_data.push(bar_data.new(math.round_to_mintick(high),math.round_to_mintick(low), volume, bar_index))
+
+// Structure calculation
+var legs = array.new_line(na)
+var int waveDir = 0
+float waveTop = na
+float waveBtm = na
+var float t_val = na
+var float b_val = na
+var float last_t_val = na
+var float last_b_val = na
+var int last_t_bar = na
+var int last_b_bar = na
+var int t_bar = na
+var int b_bar = na
+
+upper = ta.highest(waveLen)
+lower = ta.lowest(waveLen)
+
+if waveDir == 1 and high[waveLen] > upper
+    waveDir := 0 
+    waveTop := high[waveLen]
+
+if waveDir == 0 and low[waveLen] < lower
+    waveDir := 1
+    waveBtm := low[waveLen]
+
+t = not na(waveTop)
+b = not na(waveBtm)
+
+if t
+    last_t_val := t_val
+    last_t_bar := t_bar
+    t_bar := bar_index-waveLen
+    t_val := waveTop
+    if sTog
+        legs.push(line.new(b_bar, b_val, t_bar, t_val, color = chart.fg_color))
+
+if b
+    last_b_val := b_val
+    last_b_bar := b_bar
+    b_bar := bar_index-waveLen
+    b_val := waveBtm
+    if sTog
+        legs.push(line.new(t_bar, t_val, b_bar, b_val, color = chart.fg_color))
+
+// Managing Array Sizes
+for i = chart_data.size()-1 to 0
+    bar = chart_data.get(i).bi
+    if bar < math.min(last_b_bar,last_t_bar)
+        chart_data.remove(i)
+
+if legs.size() > 200
+    legs.shift().delete()
+
+// Zone Calculations
+var c_zones = array.new<zones>(na)
+data_map = map.new<float,float>()
+
+bull_trigger = t and (t_val >= last_b_val) and (t_val > last_t_val)
+bear_trigger = b and (b_val <= last_t_val) and (b_val < last_b_val)
+
+float waveMax = na
+float waveMin = na
+for data in chart_data
+    if data.h > waveMax or na(waveMax)
+        waveMax := data.h
+    if data.l < waveMin or na(waveMin)
+        waveMin := data.l
+
+tick_size = math.max(syminfo.mintick,(waveMax-waveMin)/1000)
+
+if bull_trigger
+    for i = 0 to chart_data.size() - 1
+        hi = round_to(chart_data.get(i).h,tick_size)
+        lo = round_to(chart_data.get(i).l,tick_size)
+        candle_index = ((hi-lo)/tick_size)
+        tick_vol = vp?math.round((chart_data.get(i).v/(candle_index+1)),3):1
+        bar = chart_data.get(i).bi
+        if bar < last_b_bar or bar > t_bar
+            continue
+        for e = 0 to candle_index
+            val = round_to(lo+(e*tick_size),tick_size)
+            data_map.put(val, math.round(nz(data_map.get(val)),3)+tick_vol)
+
+if bear_trigger
+    for i = 0 to chart_data.size() - 1
+        hi = round_to(chart_data.get(i).h,tick_size)
+        lo = round_to(chart_data.get(i).l,tick_size)
+        candle_index = ((hi-lo)/tick_size)
+        tick_vol = vp?math.round((chart_data.get(i).v/(candle_index+1)),3):1
+        bar = chart_data.get(i).bi
+        if bar < last_t_bar or bar > b_bar
+            continue
+        for e = 0 to candle_index
+            val = round_to(lo+(e*tick_size),tick_size)
+            data_map.put(val, math.round(nz(data_map.get(val)),3)+tick_vol)
+
+if bear_trigger or bull_trigger
+    keys = map.keys(data_map)    
+    values = map.values(data_map)
+    array.sort(keys, order.ascending)
+
+    float poc = 0
+    float poc_vol = 0
+    prof_avg = array.avg(keys)
+
+    for [key, value] in data_map
+        if (value > poc_vol) or (value == poc_vol and math.abs(key-prof_avg)<math.abs(poc-prof_avg))
+            poc := key
+            poc_vol := value
+
+    avg_vol = values.avg() + values.stdev()*multi
+    up_count = poc
+    down_count = poc
+
+    for i = 0 to array.size(keys)
+        upper_vol = nz(data_map.get(round_to(up_count+tick_size,tick_size)))
+        if upper_vol >= avg_vol               
+            up_count := round_to(up_count+(tick_size*2),tick_size) 
+        else
+            break
+
+    for i = 0 to array.size(keys)
+        lower_vol = nz(data_map.get(round_to(down_count-tick_size,tick_size)))
+        if lower_vol >= avg_vol               
+            down_count := round_to(down_count-tick_size,tick_size) 
+        else
+            break
+ 
+    zone_top = math.round_to_mintick(up_count)
+    zone_bot = math.round_to_mintick(down_count)
+
+    invis = color.new(chart.bg_color,100)
+    
+    if bull_trigger
+        c_zones.push(zones.new(zone_top,box.new(last_b_bar,na,t_bar,zone_bot, border_color = bullColor, bgcolor = bullColor),line.new(last_b_bar,na,t_bar,na, style = line.style_dashed, color = (midTog?color.new(bullColor,0):invis)),1,0))
+    if bear_trigger
+        c_zones.push(zones.new(zone_top,box.new(last_t_bar,na,b_bar,zone_bot, border_color = bearColor, bgcolor = bearColor),line.new(last_t_bar,na,b_bar,na, style = line.style_dashed, color = (midTog?color.new(bearColor,0):invis)),-1,0))
+
+    if c_zones.size() > 0 
+        zn = c_zones.last()
+        zn_top = zn.top
+        zn_bot = zn.bx.get_bottom()
+        zn_left = zn.bx.get_left()
+
+        for i = c_zones.size()-1 to 0 
+            if i == c_zones.size()-1
+                continue
+
+            z = c_zones.get(i)
+            z_top = z.top
+            z_bot = z.bx.get_bottom()
+            z_left = z.bx.get_left()
+            z_dir = z.dir
+
+            if (close > z_top and z_dir == -1) or (close < z_bot and z_dir == 1) or (z.mod == -2)
+                z.mod := -1
+
+            if z.mod != -1 and (i >= c_zones.size()-3) and ( ((z_top <= zn_top) and (z_bot >= zn_bot)) or ((z_top >= zn_bot) and (z_bot <= zn_bot)) or ((z_bot <= zn_top) and (z_top >= zn_top)) )
+                zn.bx.set_top(math.max(zn_top,z_top))
+                zn.bx.set_bottom(math.min(zn_bot,z_bot))
+                zn.bx.set_left(math.min(zn_left,z_left))
+                zn.ln.set_x1(math.min(zn_left,z_left))
+                z.mod := -1
+
+            if z.mod <= -1
+                z.bx.delete()
+                z.ln.delete()
+                c_zones.remove(i)
+
+for z in c_zones
+    z_top = z.top
+    z_bot = z.bx.get_bottom()
+    z_dir = z.dir
+    z_lvl = z_dir == -1 ? z_top : z_dir == 1 ? z_bot : math.avg(z_top,z_bot)
+    if (close > z_top and z_dir == -1) or (close < z_bot and z_dir == 1)
+        z.top := z_lvl
+        z.bx.set_top(z_lvl)
+        z.bx.set_bottom(z_lvl)
+        z.bx.set_border_style(line.style_dotted)
+        z.mod := -2
+
+// Display zones
+if c_zones.size() > 0
+    bull_count = 0
+    bear_count = 0 
+    for i = c_zones.size()-1 to 0
+        z = c_zones.get(i)
+        z.bx.set_top(na)
+        z.ln.set_y1(na)
+        z.ln.set_y2(na)
+        avg = math.avg(z.top,z.bx.get_bottom())
+        if z.mod == -2    
+            z.bx.set_top(z.top)
+            z.bx.set_right(bar_index)
+            z.ln.set_x2(bar_index)
+        if (bull_count == count) and (bear_count == count)
+            continue
+        if (bull_count < count) and (z.dir == 1) and (z.mod != -2)
+            z.bx.set_top(z.top)
+            z.bx.set_right(bar_index)
+            bull_count += 1
+            z.ln.set_x2(bar_index)
+            z.ln.set_y1(avg)
+            z.ln.set_y2(avg)
+        if (bear_count < count) and (z.dir == -1) and (z.mod != -2)
+            z.bx.set_top(z.top)
+            z.bx.set_right(bar_index)
+            bear_count += 1
+            z.ln.set_x2(bar_index)
+            z.ln.set_y1(avg)
+            z.ln.set_y2(avg)
+
+// ===== AUTO TRENDLINE VISUALS =====
+// Auto Trendline settings
+var string GROUP_FRACT = "Auto Trendlines"
+var int tl_n = input.int(10, title="Fractal Period", minval=2, group=GROUP_FRACT)
+// Fractal plotting settings removed - only trendlines will be shown
+
+var string GROUP_ATL = "Auto Trendline Settings"
+var string subgroup1 = "recent line"
+var color ln_col_recent = input.color(color.new(color.purple, 0), title="Recent Line", group=GROUP_ATL, inline=subgroup1)
+var string subgroup2 = "historical line"
+var color ln_col_prev = input.color(color.new(color.gray, 50), title="Historical Line", group=GROUP_ATL, inline=subgroup2)
+var int max_tl = input.int(1, title="Max pair of lines", maxval=250, minval=1, group=GROUP_ATL)*2
+var string _str_extend = input.string("Right", options=["Right", "Both ways"], title="Which way to extend lines", group=GROUP_ATL)
+var string str_extend = _str_extend == "Both ways" ? extend.both : extend.right
+var bool show_crosses = input.bool(false, title="Show crosses", group=GROUP_ATL)
+
+// Auto Trendline constants
+var int TYPE_UP = 1
+var int TYPE_DOWN = -1
+
+// Fractal UDT
+type fractal
+    int up_or_down = na
+    int xloc = na
+    float yloc = na
+    int xloc_parent = na
+    float yloc_parent = na
+
+// Arrays for fractals and lines
+var fractal[] arr_fract = array.new<fractal>()
+var line[] arr_ln_up = array.new_line()
+var line[] arr_ln_dn = array.new_line()
+
+// Initialize fractal function
+init_fractal(int fract_type, int xloc, float yloc, int xparent, float yparent) =>
+    f = fractal.new()
+    f.up_or_down := fract_type
+    f.xloc := xloc
+    f.yloc := yloc
+    f.xloc_parent := xparent
+    f.yloc_parent := yparent
+    
+    ln = line.new(xloc, yloc, xparent, yparent, xloc.bar_index, str_extend, color=ln_col_recent, style=line.style_dashed, width=1)
+    if f.up_or_down == TYPE_UP
+        array.unshift(arr_ln_up, ln)
+    else if f.up_or_down == TYPE_DOWN
+        array.unshift(arr_ln_dn, ln)
+    
+    array.unshift(arr_fract, f)
+    f
+
+// Drop and roll function
+drop_and_roll(fractal f) =>
+    arr_ln = f.up_or_down == TYPE_UP ? arr_ln_up : f.up_or_down == TYPE_DOWN ? arr_ln_dn : na
+    if array.size(arr_ln) > 1
+        line.set_color(array.get(arr_ln, 1), ln_col_prev)
+        line.set_width(array.get(arr_ln, 1), 1)
+        while array.size(arr_ln) > math.floor(max_tl/2)
+            line.delete(array.pop(arr_ln))
+
+// Draw trendline function
+draw_trendline(fract_type, x2, y2, x1, y1) =>
+    f = init_fractal(fract_type, x2, y2, x1, y1)
+    drop_and_roll(f)
+
+// Fractal detection using pivot high/low
+float ph = ta.pivothigh(tl_n, tl_n)[1]
+bool upfract = not na(ph)
+float pl = ta.pivotlow(tl_n, tl_n)[1]
+bool downfract = not na(pl)
+
+// Recent fractal pointers
+var float recent_dn1 = na, var int i_recent_dn1 = na
+var float recent_up1 = na, var int i_recent_up1 = na
+var float recent_dn2 = na, var int i_recent_dn2 = na
+var float recent_up2 = na, var int i_recent_up2 = na
+
+// Process downward fractals
+if downfract
+    recent_dn2 := recent_dn1, i_recent_dn2 := i_recent_dn1
+    recent_dn1 := low[tl_n+1], i_recent_dn1 := bar_index-tl_n-1
+    draw_trendline(TYPE_DOWN, i_recent_dn2, recent_dn2, i_recent_dn1, recent_dn1)
+
+// Process upward fractals
+if upfract
+    recent_up2 := recent_up1, i_recent_up2 := i_recent_up1
+    recent_up1 := high[tl_n+1], i_recent_up1 := bar_index-tl_n-1
+    draw_trendline(TYPE_UP, i_recent_up2, recent_up2, i_recent_up1, recent_up1)
+
+// Fractal plotting removed - only trendlines will be displayed
+
+// Slope calculation function
+get_slope(xA, yA, xB, yB) =>
+    (yB - yA) / (xB - xA)
+
+// Calculate trendline values at current bar
+float m_dn = get_slope(i_recent_dn1, recent_dn1, i_recent_dn2, recent_dn2)
+float y_dn = (m_dn * bar_index) + recent_dn1 - (m_dn * i_recent_dn1)
+float m_up = get_slope(i_recent_up1, recent_up1, i_recent_up2, recent_up2)
+float y_up = (m_up * bar_index) + recent_up1 - (m_up * i_recent_up1)
+
+// Plot trendline crosses
+bool cross_upper = ta.cross(close, y_up)
+bool cross_lower = ta.cross(close, y_dn)
+plotshape(show_crosses and cross_upper, title="Crossed upper trendline", style=shape.xcross, location=location.belowbar, color=color.new(color.blue, 50), size=size.small)
+plotshape(show_crosses and cross_lower, title="Crossed lower trendline", style=shape.xcross, location=location.abovebar, color=color.new(color.red, 50), size=size.small)
+
+handleDashboard()

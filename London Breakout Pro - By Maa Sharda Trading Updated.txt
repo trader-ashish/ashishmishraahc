@@ -1,0 +1,103 @@
+//@version=5
+indicator("London Breakout PRO – By Maa Sharda Trading (Boosted)", overlay=true, max_boxes_count=2)
+
+// ------ USER SETTINGS ------
+sessionStartHour = input.int(13, "London Start Hour (IST)", minval=0, maxval=23)
+sessionStartMin  = input.int(30, "London Start Min (IST)", minval=0, maxval=59)
+boxMinutes       = input.int(240, "Box Candle Minutes", minval=1, maxval=1000)
+showBox          = input(true, "Show Breakout Box")
+emaLength        = input.int(20, "EMA Length")
+useVolumeConfirm = input(true, "Use Volume Confirmation")
+
+useRSIConfirm    = input(true, "Use RSI Confirmation")
+useADXConfirm    = input(true, "Use ADX Confirmation")
+rsiLength        = input.int(14, "RSI Length")
+adxLength        = input.int(14, "ADX Length")
+adxMin           = input.float(20, "ADX Min Strength")
+
+// ----- Time Handling -----
+ist_offset = 5.5
+barTime = time + int(ist_offset * 3600000)
+boxStartSec = sessionStartHour * 3600 + sessionStartMin * 60
+boxEndSec   = boxStartSec + boxMinutes * 60
+currentSecOfDay = ((barTime % 86400000) / 1000)
+
+// ----- LONDON BOX -----
+isBox = currentSecOfDay >= boxStartSec and currentSecOfDay < boxEndSec
+isBoxPrev = currentSecOfDay[1] >= boxStartSec and currentSecOfDay[1] < boxEndSec
+boxStartBar = not isBoxPrev and isBox
+boxEndBar   = isBoxPrev and not isBox
+
+var float boxHigh = na
+var float boxLow  = na
+var int boxBarIdx = na
+var box sessionBox = na
+
+if boxStartBar
+    boxHigh := high
+    boxLow  := low
+    boxBarIdx := bar_index
+if isBox and not na(boxHigh)
+    boxHigh := math.max(boxHigh, high)
+    boxLow  := math.min(boxLow, low)
+if boxEndBar and showBox
+    sessionBox := box.new(left=boxBarIdx, right=bar_index, top=boxHigh, bottom=boxLow, border_color=color.yellow, bgcolor=color.new(color.yellow, 90))
+
+// --- EMA & Volume ---
+emaValue = ta.ema(close, emaLength)
+avgVol   = ta.sma(volume, 10)
+volCond  = useVolumeConfirm ? (volume > avgVol) : true
+
+// --- ADX (manual) ---
+f_adx(len) =>
+    upMove   = high - high[1]
+    downMove = low[1] - low
+    plusDM   = (upMove > 0 and upMove > downMove) ? upMove : 0.0
+    minusDM  = (downMove > 0 and downMove > upMove) ? downMove : 0.0
+    tr = math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
+    trRMA    = ta.rma(tr, len)
+    plusRMA  = ta.rma(plusDM, len)
+    minusRMA = ta.rma(minusDM, len)
+    plusDI   = 100.0 * plusRMA / trRMA
+    minusDI  = 100.0 * minusRMA / trRMA
+    dx       = 100.0 * math.abs(plusDI - minusDI) / math.max(plusDI + minusDI, 1e-10)
+    adx      = ta.rma(dx, len)
+    adx
+
+adxVal = f_adx(adxLength)
+
+// --- RSI ---
+rsiVal      = ta.rsi(close, rsiLength)
+rsiBuyCond  = rsiVal > 50
+rsiSellCond = rsiVal < 50
+adxCond     = adxVal > adxMin
+
+// --- Only first breakout + Confirmation ---
+var bool brokenHigh = false
+var bool brokenLow  = false
+
+firstBreakUp = false
+firstBreakDn = false
+
+if boxEndBar
+    brokenHigh := false
+    brokenLow  := false
+
+// BUY breakout
+if not isBox and not isBoxPrev and not na(boxHigh[1]) and not brokenHigh and close > boxHigh[1] and close > emaValue and volCond
+    if (not useRSIConfirm or rsiBuyCond) and (not useADXConfirm or adxCond)
+        firstBreakUp := true
+        brokenHigh := true
+
+// SELL breakout
+if not isBox and not isBoxPrev and not na(boxLow[1]) and not brokenLow and close < boxLow[1] and close < emaValue and volCond
+    if (not useRSIConfirm or rsiSellCond) and (not useADXConfirm or adxCond)
+        firstBreakDn := true
+        brokenLow := true
+
+plotshape(firstBreakUp, style=shape.triangleup, location=location.belowbar, color=color.green, size=size.normal, text="BUY")
+plotshape(firstBreakDn, style=shape.triangledown, location=location.abovebar, color=color.red, size=size.normal, text="SELL")
+
+plot(emaValue, color=color.blue, linewidth=2, title="EMA 20")
+plot(adxVal,   title="ADX",  display=display.none)
+plot(rsiVal,   title="RSI",  display=display.none)

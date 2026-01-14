@@ -1,0 +1,1818 @@
+﻿//@version=6
+indicator('<[$/Умный тактик на основе объемов/$]>', shorttitle = '<[$/Smart Volume Tactician/$]>', overlay = true, max_bars_back = 1000, max_boxes_count = 500, max_lines_count = 200)
+//==========================
+// НАСТРОЙКИ ПРОИЗВОДИТЕЛЬНОСТИ
+//==========================
+performanceGroup = '=== Настройки производительности ==='
+maxLookbackBars = input.int(1000, 'Макс. баров для анализа', minval = 10, maxval = 2000, step = 100, group = performanceGroup, tooltip = 'Уменьшите для лучшей производительности на младших ТФ')
+enableComplexCalculations = input.bool(true, 'Включить сложные расчеты LVN/HVN', group = performanceGroup, tooltip = 'Отключите для лучшей производительности при необходимости')
+//==========================
+// ВЫБОР ТИПА СЕССИИ
+//==========================
+sessionType = input.string('Daily', 'Тип сессии', options = ['Sydney', 'Tokyo', 'Asian', 'Frankfurt', 'London', 'European', 'New York', 'US Extended', 'Asia-London Overlap', 'London-NY Overlap', 'Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly'])
+sessionCalcMethod = input.string('Include Previous Session', 'Метод расчета сессии', options = ['Start Fresh', 'Include Previous Session'], tooltip = 'Start Fresh: Начинать расчеты с начала сессии | Include Previous Session: Учитывать предыдущую сессию для лучшего распределения (предотвращает скопление в начале сессии)')
+showDisclaimer = input.bool(true, 'Показывать предупреждение', tooltip = 'Отображать важные предупреждения об ограничениях сессий на младших ТФ')
+//==========================
+// НАСТРОЙКИ LVN/HVN
+//==========================
+lvnHvnGroup = '=== Настройки зон LVN/HVN ==='
+showLvnHvn = input.bool(true, 'Показывать зоны LVN/HVN', group = lvnHvnGroup, tooltip = 'Закрашивать зоны на основе объемных узлов')
+showSinglePrints = input.bool(true, 'Показывать Single Prints (разрывы внутри VA)', group = lvnHvnGroup, tooltip = 'Показывать небольшие разрывы объема внутри Value Area - зоны заполнения')
+lvnThreshold = input.float(0.5, 'Порог LVN', minval = 0.1, maxval = 0.9, step = 0.1, group = lvnHvnGroup, tooltip = 'Порог объема для Low Volume Nodes - зоны НИЖЕ VAL, где цена может провалиться')
+hvnThreshold = input.float(0.2, 'Порог HVN', minval = 0.1, maxval = 1.5, step = 0.1, group = lvnHvnGroup, tooltip = 'Порог объема для High Volume Nodes - зоны ВЫШЕ VAH (зоны сопротивления) - меньше = чувствительнее')
+singlePrintThreshold = input.float(0.3, 'Порог Single Print', minval = 0.1, maxval = 0.8, step = 0.1, group = lvnHvnGroup, tooltip = 'Порог для обнаружения Single Prints внутри Value Area')
+lvnColor = input.color(color.new(#00FF00, 70), 'Цвет LVN', group = lvnHvnGroup, tooltip = 'Цвет фона для Low Volume зон ниже VAL - "GO" зоны для импульса')
+hvnColor = input.color(color.new(#FF0000, 85), 'Цвет HVN', group = lvnHvnGroup, tooltip = 'Цвет фона для High Volume зон выше VAH - "STOP" зоны с сопротивлением')
+singlePrintColor = input.color(color.new(color.blue, 80), 'Цвет Single Print', group = lvnHvnGroup, tooltip = 'Цвет фона для Single Prints внутри Value Area - зоны заполнения')
+showLvnHvnLabels = input.bool(true, 'Показывать метки LVN/HVN', group = lvnHvnGroup, tooltip = 'Отображать текстовые метки для зон LVN и HVN')
+lvnHvnTransparency = input.int(70, 'Прозрачность фона', minval = 0, maxval = 95, step = 5, group = lvnHvnGroup, tooltip = 'Базовая прозрачность - градиенты показывают уровни объема внутри каждой зоны')
+lvnHvnWidth = input.float(1.5, 'Ширина зон LVN/HVN', minval = 0.5, maxval = 3.0, step = 0.1, group = lvnHvnGroup, tooltip = 'Контролирует ширину зон LVN/HVN. Меньше = уже зоны')
+//==========================
+// НАСТРОЙКИ ОРДЕР БЛОКОВ
+//==========================
+orderBlocksGroup = '=== Ордер Блоки ==='
+source = input.string('Wicks', options = ['Wicks', 'Bodys'], title = 'Источник', group = orderBlocksGroup)
+
+leftLenH = input.int(title = 'Pivot High', defval = 25, minval = 1, inline = 'Pivot High', group = orderBlocksGroup)
+rightLenH = input.int(title = '/', defval = 25, minval = 1, inline = 'Pivot High', group = orderBlocksGroup)
+
+leftLenL = input.int(title = 'Pivot Low', defval = 25, minval = 1, inline = 'Pivot Low', group = orderBlocksGroup)
+rightLenL = input.int(title = '/', defval = 25, minval = 1, inline = 'Pivot Low', group = orderBlocksGroup)
+
+bullBoxColor = input.color(color.new(#00FF00, 50), title = 'Цвет бычьих', group = orderBlocksGroup, inline = '1')
+bearBoxColor = input.color(color.new(#FF0000, 50), title = 'Цвет медвежьих', group = orderBlocksGroup, inline = '1')
+closedBoxColor = input.color(color.new(color.gray, 90), title = 'Закрытые', group = orderBlocksGroup, inline = '1')
+
+extendBox = input.bool(true, title = 'Расширять блоки', group = orderBlocksGroup, tooltip = 'Расширять блоки до момента касания ценой')
+boxLength = input.int(30, title = 'Размер блока', tooltip = 'Если расширение отключено, блоки будут отрисованы этой длины', group = orderBlocksGroup)
+//==========================
+// НАСТРОЙКИ АЛЕРТОВ
+//==========================
+alertGroup = '=== Настройки алертов ==='
+enableVPAlerts = input.bool(true, 'Алерты Volume Profile', group = alertGroup, tooltip = 'Алерты при пересечении POC, VAH или VAL (включает комплексные данные рынка)')
+enableOBAlerts = input.bool(true, 'Алерты Ордер Блоков', group = alertGroup, tooltip = 'Алерты при входе в зоны ордер блоков (включает комплексные данные рынка)')
+enableFibAlerts = input.bool(true, 'Алерты Fib уровней', group = alertGroup, tooltip = 'Алерты при пересечении пользовательского уровня Фибоначчи (включает комплексные данные рынка)')
+enableLvnHvnAlerts = input.bool(true, 'Алерты LVN/HVN/NPOC', group = alertGroup, tooltip = 'Алерты при входе в зоны LVN, HVN или NPOC')
+enableSignalAlerts = input.bool(true, 'Алерты сигналов', group = alertGroup, tooltip = 'Алерты при срабатывании сигналов покупки/продажи')
+// Объявление сигнальных переменных
+var bool buySignalAtLevel = false
+var bool sellSignalAtLevel = false
+customFibLevel = input.float(0.618, 'Пользовательский уровень Fib для алертов', minval = 0.0, maxval = 1.0, step = 0.001, group = alertGroup, tooltip = 'Установите пользовательский уровень Фибоначчи между 0.0 и 1.0')
+alertFrequency = input.string('Once Per Bar Close', 'Частота алертов', options = ['Once Per Bar Close', 'Once Per Bar'], group = alertGroup)
+//==========================
+// НАСТРОЙКИ СИГНАЛОВ (УПРОЩЕННЫЕ)
+//==========================
+signalGroup = '=== Настройки сигналов покупки/продажи ==='
+enableSignals = input.bool(true, 'Включить сигналы', group = signalGroup, tooltip = 'Показывать сигналы на ключевых уровнях (зеленые/красные треугольники)')
+// Параметры сигналов
+signalMinCandleSize = input.float(1.5, 'Минимальный размер свечи (умножение ATR)', minval = 0.5, maxval = 5.0, step = 0.1, group = signalGroup, tooltip = 'Минимальный размер свечи установки относительно ATR')
+signalReversalThreshold = input.float(50.0, '% разворота свечи', minval = 10.0, maxval = 80.0, step = 5.0, group = signalGroup, tooltip = 'Какой процент свечи установки должен быть отыгран (50% = половина свечи)')
+signalLevelTolerance = input.float(0.005, 'Допуск к уровню %', minval = 0.001, maxval = 0.01, step = 0.001, group = signalGroup, tooltip = 'Насколько близко цена должна быть к ключевому уровню для срабатывания сигнала (в процентах от цены)')
+//==========================
+// НАСТРОЙКИ СЕССИЙ И VOLUME PROFILE
+//==========================
+showProf = input.bool(true, 'Показывать Volume Profile', group = 'Отображение')
+showSbox = input.bool(true, 'Показывать сессионный бокс', group = 'Отображение')
+showPoc = input.bool(true, 'Показывать POC', group = 'Отображение')
+showVA = input.bool(true, 'Показывать VAH и VAL', group = 'Отображение')
+showVAb = input.bool(false, 'Показывать бокс Value Area', group = 'Отображение')
+showCur = input.bool(true, 'Показывать текущую зону', group = 'Отображение')
+showLabels = input.bool(true, 'Показывать метки сессий', group = 'Отображение')
+showFx = input.bool(false, 'Показывать Форекс сессии (без профиля)', group = 'Отображение')
+extendLines = input.bool(true, 'Продлевать линии VAL/VAH/POC', group = 'Отображение')
+showFib = input.bool(true, 'Показывать уровни Фибоначчи', group = 'Отображение')
+extendFibLines = input.bool(false, 'Продлевать линии Фибоначчи', group = 'Отображение')
+
+resolution = input.int(20, 'Разрешение', minval = 5, maxval = 50, tooltip = 'Меньше = лучше производительность. Больше = детальнее профили, но медленнее расчет', group = 'Настройки Volume Profile')
+VAwid = input.int(70, '% объема Value Area', minval = 1, maxval = 100, group = 'Настройки Volume Profile')
+dispMode = input.string('Mode 2', 'Режим баров', ['Mode 1', 'Mode 2'], group = 'Настройки Volume Profile', tooltip = 'Mode 1: Быки + Медведи рядом с процентами | Mode 2: Быки + Медведи с наложением и процентами (РЕКОМЕНДУЕТСЯ)')
+smoothVol = input.bool(false, 'Сглаживать данные объема', tooltip = 'Полезно для активов с большими скачками объема - помогает создавать лучшие профили', group = 'Настройки Volume Profile')
+// Настройки улучшения Mode 1 и 2
+showMode12Percentages = input.bool(true, 'Показывать проценты в Mode 1/2', group = 'Настройки Volume Profile', tooltip = 'Показывать процентное соотношение быков/медведей на объемных узлах в Mode 1 и Mode 2')
+mode12TextDistance = input.int(2, 'Расстояние текста от узлов', minval = 1, maxval = 10, step = 1, group = 'Настройки Volume Profile', tooltip = 'Расстояние процентного текста от объемных узлов (меньше = ближе)')
+// Настройки Фибоначчи
+showFibPrices = input.bool(true, 'Показывать цены', group = 'Фибоначчи')
+showFibLevels = input.bool(true, 'Показывать уровни', group = 'Фибоначчи')
+fibLevelsFormat = input.string('Percent', 'Формат', options = ['Values', 'Percent'], group = 'Фибоначчи')
+fibLabelsPosition = input.string('Right', 'Позиция меток', options = ['Left', 'Right'], group = 'Фибоначчи')
+fibColor = input.color(color.white, 'Цвет Фибоначчи', group = 'Фибоначчи')
+autoFibDirection = input.bool(true, 'Автоопределение направления Фибо', tooltip = 'При включении автоматически определяет, является ли сессия бычьей (откат от минимума) или медвежьей (откат от максимума)', group = 'Фибоначчи')
+// Настройки уровней Фибоначчи
+show_fib_0 = input(true, '0%', inline = 'fib_level_0', group = 'Уровни Фибоначчи')
+color_fib_0 = input(color.white, '', inline = 'fib_level_0', group = 'Уровни Фибоначчи')
+
+show_fib_236 = input(true, '23.6%', inline = 'fib_level_1', group = 'Уровни Фибоначчи')
+color_fib_236 = input(color.white, '', inline = 'fib_level_1', group = 'Уровни Фибоначчи')
+
+show_fib_382 = input(true, '38.2%', inline = 'fib_level_2', group = 'Уровни Фибоначчи')
+color_fib_382 = input(color.white, '', inline = 'fib_level_2', group = 'Уровни Фибоначчи')
+
+show_fib_50 = input(true, '50%', inline = 'fib_level_3', group = 'Уровни Фибоначчи')
+color_fib_50 = input(color.white, '', inline = 'fib_level_3', group = 'Уровни Фибоначчи')
+
+show_fib_618 = input(true, '61.8%', inline = 'fib_level_4', group = 'Уровни Фибоначчи')
+color_fib_618 = input(color.white, '', inline = 'fib_level_4', group = 'Уровни Фибоначчи')
+
+show_fib_650 = input(true, '65%', inline = 'fib_level_5', group = 'Уровни Фибоначчи')
+color_fib_650 = input(color.white, '', inline = 'fib_level_5', group = 'Уровни Фибоначчи')
+
+show_fib_786 = input(true, '78.6%', inline = 'fib_level_6', group = 'Уровни Фибоначчи')
+color_fib_786 = input(color.white, '', inline = 'fib_level_6', group = 'Уровни Фибоначчи')
+
+show_fib_886 = input(true, '88.6%', inline = 'fib_level_7', group = 'Уровни Фибоначчи')
+color_fib_886 = input(color.white, '', inline = 'fib_level_7', group = 'Уровни Фибоначчи')
+
+show_fib_100 = input(true, '100%', inline = 'fib_level_8', group = 'Уровни Фибоначчи')
+color_fib_100 = input(color.white, '', inline = 'fib_level_8', group = 'Уровни Фибоначчи')
+
+dataTf = ''
+
+bullCol = input.color(color.rgb(0, 255, 0, 50), 'Объем вверх', group = 'Внешний вид')
+bearCol = input.color(color.rgb(255, 0, 0, 50), 'Объем вниз', group = 'Внешний вид')
+VAbCol = input.color(color.rgb(107, 159, 255, 90), 'Бокс Value Area', group = 'Внешний вид')
+pocCol = input.color(color.white, 'POC', inline = 'p', group = 'Внешний вид')
+pocWid = input.int(3, 'Толщина', inline = 'p', group = 'Внешний вид')
+vahCol = input.color(color.rgb(255, 0, 0), 'VAH', inline = 'h', group = 'Внешний вид')
+vahWid = input.int(3, 'Толщина', inline = 'h', group = 'Внешний вид')
+valCol = input.color(color.rgb(0, 255, 0), 'VAL', inline = 'l', group = 'Внешний вид')
+valWid = input.int(3, 'Толщина', inline = 'l', group = 'Внешний вид')
+boxBg = input.color(color.rgb(255, 153, 0, 100), 'Сессионный бокс', inline = 'm', group = 'Внешний вид')
+boxWid = input.int(1, 'Толщина', inline = 'm', group = 'Внешний вид')
+//==========================
+// ЛОГИКА ОРДЕР БЛОКОВ
+//==========================
+
+// Опция Wick/Body для ордер блоков
+phOption = source == 'Wicks' ? high : close
+plOption = source == 'Wicks' ? low : close
+
+ph = ta.pivothigh(phOption, leftLenH, rightLenH)
+pl = ta.pivotlow(plOption, leftLenL, rightLenL)
+// Переменные ордер блоков
+var leftBull = bar_index
+var rightBull = bar_index
+var topBull = close
+var bottomBull = close
+
+var leftBear = bar_index
+var rightBear = bar_index
+var topBear = close
+var bottomBear = close
+
+var array<box> _bearBoxes = array.new_box()
+var array<box> _bullBoxes = array.new_box()
+// Расчет медвежьего блока
+if not na(ph)
+    leftBear := bar_index - leftLenH
+    rightBear := bar_index - (leftLenH - boxLength)
+    topBear := source == 'Bodys' ? close[leftLenL] > open[leftLenL] ? close[leftLenH] : open[leftLenH] : high[leftLenL]
+    bottomBear := source == 'Bodys' ? close[leftLenL] > open[leftLenL] ? open[leftLenH] : close[leftLenH] : close[leftLenL] > open[leftLenL] ? close[leftLenL] : open[leftLenL]
+    bottomBear
+
+// Расчет бычьего блока
+if not na(pl)
+    leftBull := bar_index - leftLenL
+    rightBull := bar_index - (leftLenL - boxLength)
+    topBull := source == 'Bodys' ? close[leftLenL] > open[leftLenL] ? close[leftLenL] : open[leftLenL] : close[leftLenL] > open[leftLenL] ? open[leftLenL] : close[leftLenL]
+    bottomBull := source == 'Bodys' ? close[leftLenL] > open[leftLenL] ? open[leftLenL] : close[leftLenL] : low[leftLenL]
+    bottomBull
+
+if not na(pl)
+    array.push(_bullBoxes, box.new(left = leftBull, right = rightBull, top = topBull, bottom = bottomBull, bgcolor = color.new(bullBoxColor, 80), border_color = bullBoxColor))
+
+if not na(ph)
+    array.push(_bearBoxes, box.new(left = leftBear, right = rightBear, top = topBear, bottom = bottomBear, bgcolor = color.new(bearBoxColor, 80), border_color = bearBoxColor))
+
+// Функция расширения ордер блоков
+extend_boxes(_array, _type) =>
+    if array.size(_array) > 0
+        for i = 0 to array.size(_array) - 1 by 1
+            _box = array.get(_array, i)
+            _boxLow = box.get_bottom(_box)
+            _boxHigh = box.get_top(_box)
+            _boxLeft = box.get_left(_box)
+            _boxRight = box.get_right(_box)
+
+            if _type == 'bull' and _boxRight == bar_index
+                if low > _boxHigh
+                    box.set_right(_box, bar_index + 1)
+                else
+                    box.set_bgcolor(_box, closedBoxColor)
+                    box.set_border_color(_box, closedBoxColor)
+                    box.set_text_color(_box, closedBoxColor)
+                    box.set_right(_box, bar_index)
+
+            if _type == 'bear' and _boxRight == bar_index
+                if high < _boxLow
+                    box.set_right(_box, bar_index + 1)
+                else
+                    box.set_bgcolor(_box, closedBoxColor)
+                    box.set_border_color(_box, closedBoxColor)
+                    box.set_text_color(_box, closedBoxColor)
+                    box.set_right(_box, bar_index)
+
+if extendBox == true
+    extend_boxes(_bullBoxes, 'bull')
+    extend_boxes(_bearBoxes, 'bear')
+
+//==========================
+// ЛОГИКА СЕССИЙ И VOLUME PROFILE
+//==========================
+
+// Константы/Объявления переменных для сессий
+var int zoneStart = 0
+var int sydneyStart = 0
+var int tokyoStart = 0
+var int asianStart = 0
+var int frankfurtStart = 0
+var int londonStart = 0
+var int europeanStart = 0
+var int nyStart = 0
+var int usExtendedStart = 0
+var int asiaLondonStart = 0
+var int londonNYStart = 0
+
+// Функция получения периода сессии в барах (приблизительно)
+getSessionPeriodBars() =>
+    switch sessionType
+        'Daily' => int(1440 / timeframe.in_seconds(timeframe.period) * 60) // ~1 день в барах
+        'Weekly' => int(7 * 1440 / timeframe.in_seconds(timeframe.period) * 60) // ~7 дней в барах  
+        'Monthly' => int(30 * 1440 / timeframe.in_seconds(timeframe.period) * 60) // ~30 дней в барах
+        'Quarterly' => int(90 * 1440 / timeframe.in_seconds(timeframe.period) * 60) // ~90 дней в барах
+        'Yearly' => int(365 * 1440 / timeframe.in_seconds(timeframe.period) * 60) // ~365 дней в барах
+        'Sydney' => int(9 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~9 часов
+        'Tokyo' => int(9 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~9 часов
+        'Asian' => int(12 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~12 часов
+        'Frankfurt' => int(9 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~9 часов
+        'London' => int(9 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~9 часов
+        'European' => int(10 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~10 часов
+        'New York' => int(9 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~9 часов
+        'US Extended' => int(16 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~16 часов
+        'Asia-London Overlap' => int(2 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~2 часа
+        'London-NY Overlap' => int(3 * 60 / timeframe.in_seconds(timeframe.period) * 60) // ~3 часа
+        => int(1440 / timeframe.in_seconds(timeframe.period) * 60) // По умолчанию ~1 день
+
+// Улучшенный расчет lookback с учетом метода сессии
+sessionPeriodBars = math.min(getSessionPeriodBars(), maxLookbackBars)
+
+// Улучшенный расчет lookback - ОРИГИНАЛЬНЫЙ
+int safeLookback = zoneStart > 0 and bar_index >= zoneStart ? math.min(math.min(bar_index - zoneStart, maxLookbackBars), 4999) : math.min(bar_index, maxLookbackBars)
+int lookback = math.max(safeLookback, 1)
+var activeZone = false
+
+// Определение массивов для хранения информации
+var vpGreen = array.new_float(resolution, 0) // Сумма объема на бычьих барах
+var vpRed = array.new_float(resolution, 0) // То же самое для медвежьих баров
+var zoneBounds = array.new_float(resolution, 0) // Массив для хранения максимальных значений в зоне
+
+// Массивы LVN/HVN
+var lvnHvnBoxes = array.new_box()
+var lvnHvnLabels = array.new_label()
+
+//Значения для хранения текущих внутрибарных данных
+var array<float> ltfOpen = array.new_float(0)
+var array<float> ltfClose = array.new_float(0)
+var array<float> ltfHigh = array.new_float(0)
+var array<float> ltfLow = array.new_float(0)
+var array<float> ltfVolume = array.new_float(0)
+
+// Массивы для хранения линий Фибоначчи для лучшего управления
+type FibLevel
+	line fibLine
+	label fibLabel
+	float level
+	color levelColor
+	bool show
+
+var array<FibLevel> currentFibLines = array.new<FibLevel>()
+
+//Выбор данных объема для использования
+vol() =>
+    smoothVol ? ta.ema(volume, 5) : volume
+
+//Получение внутрибарных начальных данных
+[dO, dC, dH, dL, dV] = request.security_lower_tf(syminfo.tickerid, dataTf, [open, close, high, low, vol()])
+
+// Функция сброса профиля
+resetProfile(enable) =>
+    if enable
+        array.fill(vpGreen, 0)
+        array.fill(vpRed, 0)
+        array.clear(ltfOpen)
+        array.clear(ltfHigh)
+        array.clear(ltfLow)
+        array.clear(ltfClose)
+        array.clear(ltfVolume)
+
+// Безопасная историческая ссылка с проверкой границ
+safeHigh(offset) =>
+    if bar_index >= offset and offset >= 0 and offset <= 4999
+        high[offset]
+    else
+        high
+
+safeLow(offset) =>
+    if bar_index >= offset and offset >= 0 and offset <= 4999
+        low[offset]
+    else
+        low
+
+// Умный расчет границ - ИСПРАВЛЕН дублирующийся параметр
+_maxSafeBars = math.min(bar_index, maxLookbackBars)
+_profLength = zoneStart > 0 and bar_index >= zoneStart ? math.min(math.min(lookback + 1, _maxSafeBars), 5000) : math.min(bar_index + 1, maxLookbackBars)
+_profLengthCurrent = math.min(bar_index + 1, 1000)
+
+_profHighSession = ta.highest(high, _profLength)[1]
+_profLowSession = ta.lowest(low, _profLength)[1]
+_profHighCurrent = ta.highest(high, _profLengthCurrent)
+_profLowCurrent = ta.lowest(low, _profLengthCurrent)
+
+// Извлечение вызовов функций для согласованности
+lookbackForBounds = math.min(sessionPeriodBars, maxLookbackBars)
+smartHigh = ta.highest(high, lookbackForBounds)
+smartLow = ta.lowest(low, lookbackForBounds)
+smartATR = ta.atr(14) // Переименовано, чтобы избежать дублирования
+
+// Применение умных границ только при необходимости
+if sessionCalcMethod == 'Include Previous Session' and zoneStart > 0 and bar_index <= zoneStart + 5
+    // В начале сессии используем более широкие границы, если текущий диапазон слишком мал
+    currentRange = _profHighSession - _profLowSession
+    if currentRange < smartATR * 3 // Если текущий диапазон меньше 3 ATR
+        smartRange = smartHigh - smartLow
+
+        // Используем умные границы только если они значительно лучше
+        if smartRange > currentRange * 1.5
+            _profHighSession := smartHigh
+            _profLowSession := smartLow
+            _profLowSession
+
+profHigh = zoneStart > 0 and bar_index >= zoneStart and _profLength > 1 ? _profHighSession : _profHighCurrent
+profLow = zoneStart > 0 and bar_index >= zoneStart and _profLength > 1 ? _profLowSession : _profLowCurrent
+
+tr = ta.atr(1)
+atr = ta.atr(14)
+
+get_vol(y11, y12, y21, y22, height, vol) =>
+    nz(math.max(math.min(math.max(y11, y12), math.max(y21, y22)) - math.max(math.min(y11, y12), math.min(y21, y22)), 0) * vol / height)
+
+profileAdd(o, h, l, c, v, g, w) =>
+    //Массив для хранения распределения по зонам, в масштабе от 1 (полный размер разрыва) до 0
+    zoneDist = array.new_float(resolution, 0)
+    distSum = 0.0
+    // Проход по каждой зоне
+    for i = 0 to array.size(vpGreen) - 1 by 1
+        // Проверка, находится ли текущий бар в зоне
+        zoneTop = array.get(zoneBounds, i)
+        zoneBot = zoneTop - g
+
+        body_top = math.max(c, o)
+        body_bot = math.min(c, o)
+        itsgreen = c >= o
+
+        topwick = h - body_top
+        bottomwick = body_bot - l
+        body = body_top - body_bot
+
+        bodyvol = body * v / (2 * topwick + 2 * bottomwick + body)
+        topwickvol = 2 * topwick * v / (2 * topwick + 2 * bottomwick + body)
+        bottomwickvol = 2 * bottomwick * v / (2 * topwick + 2 * bottomwick + body)
+
+        // Расчет Volume Profile с использованием стандартного объема
+        array.set(vpGreen, i, array.get(vpGreen, i) + (itsgreen ? get_vol(zoneBot, zoneTop, body_bot, body_top, body, bodyvol) : 0) + get_vol(zoneBot, zoneTop, body_top, h, topwick, topwickvol) / 2 + get_vol(zoneBot, zoneTop, body_bot, l, bottomwick, bottomwickvol) / 2)
+        array.set(vpRed, i, array.get(vpRed, i) + (itsgreen ? 0 : get_vol(zoneBot, zoneTop, body_bot, body_top, body, bodyvol)) + get_vol(zoneBot, zoneTop, body_top, h, topwick, topwickvol) / 2 + get_vol(zoneBot, zoneTop, body_bot, l, bottomwick, bottomwickvol) / 2)
+
+calcSession(update) =>
+    array.fill(vpGreen, 0)
+    array.fill(vpRed, 0)
+    if bar_index > lookback and update and zoneStart > 0
+        gap = (profHigh - profLow) / resolution
+
+        // Определение границ профиля
+        for i = 0 to resolution - 1 by 1
+            array.set(zoneBounds, i, profHigh - gap * i)
+
+        // Помещение каждого бара внутри зоны в массив Volume Profile
+        if array.size(ltfOpen) > 0
+            for j = 0 to array.size(ltfOpen) - 1 by 1
+                profileAdd(array.get(ltfOpen, j), array.get(ltfHigh, j), array.get(ltfLow, j), array.get(ltfClose, j), array.get(ltfVolume, j), gap, 1)
+
+pocLevel() =>
+    float maxVol = 0
+    int levelInd = 0
+    for i = 0 to array.size(vpRed) - 1 by 1
+        if array.get(vpRed, i) + array.get(vpGreen, i) > maxVol
+            maxVol := array.get(vpRed, i) + array.get(vpGreen, i)
+            levelInd := i
+            levelInd
+
+    float outLevel = na
+    if levelInd != array.size(vpRed) - 1
+        outLevel := array.get(zoneBounds, levelInd) - (array.get(zoneBounds, levelInd) - array.get(zoneBounds, levelInd + 1)) / 2
+        outLevel
+    outLevel
+
+valueLevels(poc) =>
+    float gap = (profHigh - profLow) / resolution
+    float volSum = array.sum(vpRed) + array.sum(vpGreen)
+    float volCnt = 0
+
+    float vah = profHigh
+    float val = profLow
+
+    //Поиск индекса POC
+    int pocInd = 0
+    for i = 0 to array.size(zoneBounds) - 2 by 1
+        if array.get(zoneBounds, i) >= poc and array.get(zoneBounds, i + 1) < poc
+            pocInd := i
+            pocInd
+
+    volCnt := volCnt + array.get(vpRed, pocInd) + array.get(vpGreen, pocInd)
+    for i = 1 to array.size(vpRed) by 1
+        if pocInd + i >= 0 and pocInd + i < array.size(vpRed)
+            volCnt := volCnt + array.get(vpRed, pocInd + i) + array.get(vpGreen, pocInd + i)
+            if volCnt >= volSum * (VAwid / 100)
+                break
+            else
+                val := array.get(zoneBounds, pocInd + i) - gap
+                val
+        if pocInd - i >= 0 and pocInd - i < array.size(vpRed)
+            volCnt := volCnt + array.get(vpRed, pocInd - i) + array.get(vpGreen, pocInd - i)
+            if volCnt >= volSum * (VAwid / 100)
+                break
+            else
+                vah := array.get(zoneBounds, pocInd - i)
+                vah
+
+    [val, vah]
+
+// Улучшенное обнаружение LVN/HVN с оптимизацией производительности
+detectLvnHvn() =>
+    if enableComplexCalculations and array.sum(vpGreen) + array.sum(vpRed) > 0
+        // Найти индексы POC, VAH, VAL для правильной классификации зон
+        poc = pocLevel()
+        [val, vah] = valueLevels(poc)
+        gap = (profHigh - profLow) / resolution
+
+        // Найти индексы зон для VAH, VAL, POC
+        int vahIndex = 0
+        int valIndex = resolution - 1
+        int pocIndex = 0
+
+        float maxVol = 0
+        for i = 0 to array.size(vpRed) - 1 by 1
+            zoneTop = array.get(zoneBounds, i)
+            zoneBottom = zoneTop - gap
+            zoneMid = (zoneTop + zoneBottom) / 2
+            totalVol = array.get(vpRed, i) + array.get(vpGreen, i)
+
+            // Найти индекс POC
+            if totalVol > maxVol
+                maxVol := totalVol
+                pocIndex := i
+                pocIndex
+
+            // Найти индекс VAH (ближайший к цене VAH)
+            if math.abs(zoneMid - vah) < math.abs(array.get(zoneBounds, vahIndex) - gap / 2 - vah)
+                vahIndex := i
+                vahIndex
+
+            // Найти индекс VAL (ближайший к цене VAL) 
+            if math.abs(zoneMid - val) < math.abs(array.get(zoneBounds, valIndex) - gap / 2 - val)
+                valIndex := i
+                valIndex
+
+        // Расчет порогов объема - сделать HVN более чувствительным
+        float avgVol = (array.sum(vpRed) + array.sum(vpGreen)) / resolution
+        float totalVol = array.sum(vpRed) + array.sum(vpGreen)
+        float lvnThresholdVol = avgVol * lvnThreshold // Порог низкого объема
+        float hvnThresholdVol = avgVol * hvnThreshold // Сделать HVN относительно среднего, не усиленным
+        float singlePrintThresholdVol = avgVol * singlePrintThreshold // Порог Single Print
+
+        // Также попробовать вторичный подход - найти любой объем выше среднего в верхних регионах
+        float medianVol = avgVol * 0.8 // Еще более низкий порог для обнаружения HVN
+
+        // Классификация зон с более агрессивным обнаружением HVN
+        var lvnZones = array.new_int()
+        var hvnZones = array.new_int()
+        var singlePrintZones = array.new_int()
+        array.clear(lvnZones)
+        array.clear(hvnZones)
+        array.clear(singlePrintZones)
+
+        for i = 0 to array.size(vpRed) - 1 by 1
+            totalVol := array.get(vpRed, i) + array.get(vpGreen, i)
+
+            // Сделать исключение для POC более узким
+            isPocArea = i == pocIndex // Исключить только точный POC, не окружающие области
+
+            if not isPocArea and totalVol > 0
+                // Логика HVN: ЛЮБОЙ значительный объем выше VAH (быть очень агрессивным)
+                isAboveVAH = i < vahIndex
+                // Использовать несколько критериев для обнаружения HVN
+                isHighVolume = totalVol >= hvnThresholdVol or totalVol >= medianVol and isAboveVAH
+
+                if isAboveVAH and isHighVolume
+                    array.push(hvnZones, i)
+
+                // Логика LVN: Зоны низкого объема НИЖЕ VAL (цена может провалиться)
+                isBelowVAL = i > valIndex
+                isLowVolume = totalVol <= lvnThresholdVol
+
+                if isBelowVAL and isLowVolume
+                    array.push(lvnZones, i)
+
+                // Логика NPOC: Небольшие разрывы объема ВНУТРИ Value Area
+                isWithinVA = i >= vahIndex and i <= valIndex
+                isNPOC = totalVol <= singlePrintThresholdVol
+
+                if isWithinVA and isNPOC and showSinglePrints
+                    array.push(singlePrintZones, i)
+
+        [lvnZones, hvnZones, singlePrintZones]
+
+// Функция очистки зон LVN/HVN
+clearLvnHvnAreas() =>
+    if array.size(lvnHvnBoxes) > 0
+        for i = 0 to array.size(lvnHvnBoxes) - 1 by 1
+            box.delete(array.get(lvnHvnBoxes, i))
+        array.clear(lvnHvnBoxes)
+
+    if array.size(lvnHvnLabels) > 0
+        for i = 0 to array.size(lvnHvnLabels) - 1 by 1
+            label.delete(array.get(lvnHvnLabels, i))
+        array.clear(lvnHvnLabels)
+
+// Отрисовка фоновых зон LVN/HVN с БОЛЬШЕЙ ПРОЗРАЧНОСТЬЮ, чтобы оставаться на заднем плане
+drawLvnHvnAreas(leftMax, rightMax) =>
+    if showLvnHvn and enableComplexCalculations and array.sum(vpGreen) + array.sum(vpRed) > 0
+        [lvnZones, hvnZones, singlePrintZones] = detectLvnHvn()
+        gap = (profHigh - profLow) / resolution
+
+        // Расчет разумной ширины для зон LVN/HVN - более консервативно для старших ТФ
+        // Это предотвращает слишком широкие зоны на старших ТФ, таких как месячные
+        profileWidth = rightMax - leftMax
+
+        // Базовый расчет ширины - намного меньше и с учетом ТФ
+        baseWidth = math.min(profileWidth * 0.3, 20) // Намного меньшая базовая ширина
+        userWidth = baseWidth * lvnHvnWidth
+
+        // Дополнительное ограничение на основе ТФ для очень длинных сессий
+        maxWidth = switch 
+            timeframe.ismonthly => math.min(userWidth, 15)
+            timeframe.isweekly => math.min(userWidth, 25)
+            timeframe.isdaily => math.min(userWidth, 40)
+            => userWidth
+
+        // Сначала отрисовка NPOC зон (чтобы они появлялись позади LVN/HVN) - УВЕЛИЧЕННАЯ ПРОЗРАЧНОСТЬ
+        if showSinglePrints and array.size(singlePrintZones) > 0
+            var currentNPOCStart = -1
+            var currentNPOCEnd = -1
+
+            for i = 0 to array.size(singlePrintZones) - 1 by 1
+                zoneIndex = array.get(singlePrintZones, i)
+
+                if currentNPOCStart == -1
+                    currentNPOCStart := zoneIndex
+                    currentNPOCEnd := zoneIndex
+                    currentNPOCEnd
+                else if zoneIndex == currentNPOCEnd + 1
+                    currentNPOCEnd := zoneIndex
+                    currentNPOCEnd
+                else // Отрисовка текущей NPOC зоны с белым градиентом - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    topPrice = array.get(zoneBounds, currentNPOCStart)
+                    bottomPrice = array.get(zoneBounds, currentNPOCEnd) - gap
+
+                    // Найти уровни объема внутри этой NPOC зоны
+                    float minVolInArea = 999999
+                    float maxVolInArea = 0
+
+                    for areaIdx = currentNPOCStart to currentNPOCEnd by 1
+                        areaVol = array.get(vpRed, areaIdx) + array.get(vpGreen, areaIdx)
+                        if areaVol < minVolInArea and areaVol > 0
+                            minVolInArea := areaVol
+                            minVolInArea
+                        if areaVol > maxVolInArea
+                            maxVolInArea := areaVol
+                            maxVolInArea
+
+                    // Создать градиент на основе объема для NPOC - НАМНОГО ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    areaSize = currentNPOCEnd - currentNPOCStart + 1
+                    if areaSize > 1
+                        // Отрисовка отдельных зон внутри NPOC области
+                        for zoneIdx = currentNPOCStart to currentNPOCEnd by 1
+                            zoneTop = array.get(zoneBounds, zoneIdx)
+                            zoneBottom = zoneTop - gap
+                            zoneVol = array.get(vpRed, zoneIdx) + array.get(vpGreen, zoneIdx)
+
+                            // Расчет прозрачности - НАМНОГО ВЫШЕ для фона
+                            volumeRatio = maxVolInArea > minVolInArea ? (zoneVol - minVolInArea) / (maxVolInArea - minVolInArea) : 0
+                            zoneTransparency = int(85 + volumeRatio * 10) // Диапазон 85-95% прозрачности
+                            zoneTransparency := math.max(math.min(zoneTransparency, 95), 85)
+
+                            npocBox = box.new(int(rightMax), zoneTop, int(rightMax + maxWidth), zoneBottom, bgcolor = color.new(singlePrintColor, zoneTransparency), border_color = color.new(singlePrintColor, 90), border_width = 1)
+                            array.push(lvnHvnBoxes, npocBox)
+                    else // Одиночная зона NPOC - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                        npocBox = box.new(int(rightMax), topPrice, int(rightMax + maxWidth), bottomPrice, bgcolor = color.new(singlePrintColor, 90), border_color = color.new(singlePrintColor, 90), border_width = 1)
+                        array.push(lvnHvnBoxes, npocBox)
+
+                    if showLvnHvnLabels
+                        midPrice = (topPrice + bottomPrice) / 2
+                        npocLabel = label.new(int(rightMax) + int(maxWidth * 0.15), midPrice, 'NPOC', color = color.new(color.black, 100), textcolor = color.new(color.white, 20), size = size.small, style = label.style_label_left)
+                        array.push(lvnHvnLabels, npocLabel)
+
+                    currentNPOCStart := zoneIndex
+                    currentNPOCEnd := zoneIndex
+                    currentNPOCEnd
+
+            // Отрисовка последней NPOC зоны - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+            if currentNPOCStart != -1
+                topPrice = array.get(zoneBounds, currentNPOCStart)
+                bottomPrice = array.get(zoneBounds, currentNPOCEnd) - gap
+
+                // Найти уровни объема внутри этой NPOC зоны
+                float minVolInArea = 999999
+                float maxVolInArea = 0
+
+                for areaIdx = currentNPOCStart to currentNPOCEnd by 1
+                    areaVol = array.get(vpRed, areaIdx) + array.get(vpGreen, areaIdx)
+                    if areaVol < minVolInArea and areaVol > 0
+                        minVolInArea := areaVol
+                        minVolInArea
+                    if areaVol > maxVolInArea
+                        maxVolInArea := areaVol
+                        maxVolInArea
+
+                // Создать градиент на основе объема для NPOC - НАМНОГО ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                areaSize = currentNPOCEnd - currentNPOCStart + 1
+                if areaSize > 1
+                    // Отрисовка отдельных зон внутри NPOC области
+                    for zoneIdx = currentNPOCStart to currentNPOCEnd by 1
+                        zoneTop = array.get(zoneBounds, zoneIdx)
+                        zoneBottom = zoneTop - gap
+                        zoneVol = array.get(vpRed, zoneIdx) + array.get(vpGreen, zoneIdx)
+
+                        // Расчет прозрачности - НАМНОГО ВЫШЕ для фона
+                        volumeRatio = maxVolInArea > minVolInArea ? (zoneVol - minVolInArea) / (maxVolInArea - minVolInArea) : 0
+                        zoneTransparency = int(85 + volumeRatio * 10) // Диапазон 85-95% прозрачности
+                        zoneTransparency := math.max(math.min(zoneTransparency, 95), 85)
+
+                        npocBox = box.new(int(rightMax), zoneTop, int(rightMax + maxWidth), zoneBottom, bgcolor = color.new(singlePrintColor, zoneTransparency), border_color = color.new(singlePrintColor, 90), border_width = 1)
+                        array.push(lvnHvnBoxes, npocBox)
+                else // Одиночная зона NPOC - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    npocBox = box.new(int(rightMax), topPrice, int(rightMax + maxWidth), bottomPrice, bgcolor = color.new(singlePrintColor, 90), border_color = color.new(singlePrintColor, 90), border_width = 1)
+                    array.push(lvnHvnBoxes, npocBox)
+
+                if showLvnHvnLabels
+                    midPrice = (topPrice + bottomPrice) / 2
+                    npocLabel = label.new(int(rightMax) + int(maxWidth * 0.15), midPrice, 'NPOC', color = color.new(color.black, 100), textcolor = color.new(color.white, 20), size = size.small, style = label.style_label_left)
+                    array.push(lvnHvnLabels, npocLabel)
+
+        areaRightEdge = int(rightMax + maxWidth)
+
+        // Отрисовка LVN зон - УВЕЛИЧЕННАЯ ПРОЗРАЧНОСТЬ
+        if array.size(lvnZones) > 0
+            var currentLvnStart = -1
+            var currentLvnEnd = -1
+
+            for i = 0 to array.size(lvnZones) - 1 by 1
+                zoneIndex = array.get(lvnZones, i)
+
+                if currentLvnStart == -1
+                    currentLvnStart := zoneIndex
+                    currentLvnEnd := zoneIndex
+                    currentLvnEnd
+                else if zoneIndex == currentLvnEnd + 1
+                    currentLvnEnd := zoneIndex
+                    currentLvnEnd
+                else // Отрисовка текущей LVN зоны с градиентом на основе объема - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    topPrice = array.get(zoneBounds, currentLvnStart)
+                    bottomPrice = array.get(zoneBounds, currentLvnEnd) - gap
+
+                    // Найти уровни объема внутри этой LVN зоны для создания правильного градиента
+                    float minVolInArea = 999999
+                    float maxVolInArea = 0
+
+                    for areaIdx = currentLvnStart to currentLvnEnd by 1
+                        areaVol = array.get(vpRed, areaIdx) + array.get(vpGreen, areaIdx)
+                        if areaVol < minVolInArea
+                            minVolInArea := areaVol
+                            minVolInArea
+                        if areaVol > maxVolInArea and areaVol > 0
+                            maxVolInArea := areaVol
+                            maxVolInArea
+
+                    // Создать градиент на основе объема - НАМНОГО ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    areaSize = currentLvnEnd - currentLvnStart + 1
+                    if areaSize > 1
+                        // Отрисовка отдельных зон внутри LVN области
+                        for zoneIdx = currentLvnStart to currentLvnEnd by 1
+                            zoneTop = array.get(zoneBounds, zoneIdx)
+                            zoneBottom = zoneTop - gap
+                            zoneVol = array.get(vpRed, zoneIdx) + array.get(vpGreen, zoneIdx)
+
+                            // Расчет прозрачности - НАМНОГО ВЫШЕ для фона
+                            volumeRatio = maxVolInArea > minVolInArea ? (zoneVol - minVolInArea) / (maxVolInArea - minVolInArea) : 0
+                            zoneTransparency = int(80 + volumeRatio * 15) // Диапазон 80-95% прозрачности
+                            zoneTransparency := math.max(math.min(zoneTransparency, 95), 80)
+
+                            lvnBox = box.new(int(rightMax), zoneTop, int(rightMax + maxWidth), zoneBottom, bgcolor = color.new(lvnColor, zoneTransparency), border_color = color.new(lvnColor, 90), border_width = 1)
+                            array.push(lvnHvnBoxes, lvnBox)
+                    else // Одиночная зона LVN - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                        lvnBox = box.new(int(rightMax), topPrice, int(rightMax + maxWidth), bottomPrice, bgcolor = color.new(lvnColor, 88), border_color = color.new(lvnColor, 90), border_width = 1)
+                        array.push(lvnHvnBoxes, lvnBox)
+
+                    if showLvnHvnLabels
+                        midPrice = (topPrice + bottomPrice) / 2
+                        labelText = areaSize > 2 ? 'LVN⚡' : 'LVN'
+                        lvnLabel = label.new(int(rightMax) + int(maxWidth * 0.15), midPrice, labelText, color = color.new(color.black, 100), textcolor = color.new(color.white, 10), size = size.small, style = label.style_label_left)
+                        array.push(lvnHvnLabels, lvnLabel)
+
+                    currentLvnStart := zoneIndex
+                    currentLvnEnd := zoneIndex
+                    currentLvnEnd
+
+            // Отрисовка последней LVN зоны с градиентом на основе объема - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+            if currentLvnStart != -1
+                topPrice = array.get(zoneBounds, currentLvnStart)
+                bottomPrice = array.get(zoneBounds, currentLvnEnd) - gap
+
+                // Найти уровни объема внутри этой LVN зоны для создания правильного градиента
+                float minVolInArea = 999999
+                float maxVolInArea = 0
+
+                for areaIdx = currentLvnStart to currentLvnEnd by 1
+                    areaVol = array.get(vpRed, areaIdx) + array.get(vpGreen, areaIdx)
+                    if areaVol < minVolInArea
+                        minVolInArea := areaVol
+                        minVolInArea
+                    if areaVol > maxVolInArea and areaVol > 0
+                        maxVolInArea := areaVol
+                        maxVolInArea
+
+                // Создать градиент на основе объема - НАМНОГО ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                areaSize = currentLvnEnd - currentLvnStart + 1
+                if areaSize > 1
+                    // Отрисовка отдельных зон внутри LVN области
+                    for zoneIdx = currentLvnStart to currentLvnEnd by 1
+                        zoneTop = array.get(zoneBounds, zoneIdx)
+                        zoneBottom = zoneTop - gap
+                        zoneVol = array.get(vpRed, zoneIdx) + array.get(vpGreen, zoneIdx)
+
+                        // Расчет прозрачности - НАМНОГО ВЫШЕ для фона
+                        volumeRatio = maxVolInArea > minVolInArea ? (zoneVol - minVolInArea) / (maxVolInArea - minVolInArea) : 0
+                        zoneTransparency = int(80 + volumeRatio * 15) // Диапазон 80-95% прозрачности
+                        zoneTransparency := math.max(math.min(zoneTransparency, 95), 80)
+
+                        lvnBox = box.new(int(rightMax), zoneTop, int(rightMax + maxWidth), zoneBottom, bgcolor = color.new(lvnColor, zoneTransparency), border_color = color.new(lvnColor, 90), border_width = 1)
+                        array.push(lvnHvnBoxes, lvnBox)
+                else // Одиночная зона LVN - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    lvnBox = box.new(int(rightMax), topPrice, int(rightMax + maxWidth), bottomPrice, bgcolor = color.new(lvnColor, 88), border_color = color.new(lvnColor, 90), border_width = 1)
+                    array.push(lvnHvnBoxes, lvnBox)
+
+                if showLvnHvnLabels
+                    midPrice = (topPrice + bottomPrice) / 2
+                    labelText = areaSize > 2 ? 'LVN⚡' : 'LVN'
+                    lvnLabel = label.new(int(rightMax) + int(maxWidth * 0.15), midPrice, labelText, color = color.new(color.black, 100), textcolor = color.new(color.white, 10), size = size.small, style = label.style_label_left)
+                    array.push(lvnHvnLabels, lvnLabel)
+
+        // Отрисовка HVN зон - УВЕЛИЧЕННАЯ ПРОЗРАЧНОСТЬ
+        if array.size(hvnZones) > 0
+            var currentHvnStart = -1
+            var currentHvnEnd = -1
+
+            for i = 0 to array.size(hvnZones) - 1 by 1
+                zoneIndex = array.get(hvnZones, i)
+
+                if currentHvnStart == -1
+                    currentHvnStart := zoneIndex
+                    currentHvnEnd := zoneIndex
+                    currentHvnEnd
+                else if zoneIndex == currentHvnEnd + 1
+                    currentHvnEnd := zoneIndex
+                    currentHvnEnd
+                else // Отрисовка текущей HVN зоны с градиентом на основе объема - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    topPrice = array.get(zoneBounds, currentHvnStart)
+                    bottomPrice = array.get(zoneBounds, currentHvnEnd) - gap
+
+                    // Найти уровни объема внутри этой HVN зоны
+                    float minVolInArea = 999999
+                    float maxVolInArea = 0
+
+                    for areaIdx = currentHvnStart to currentHvnEnd by 1
+                        areaVol = array.get(vpRed, areaIdx) + array.get(vpGreen, areaIdx)
+                        if areaVol < minVolInArea and areaVol > 0
+                            minVolInArea := areaVol
+                            minVolInArea
+                        if areaVol > maxVolInArea
+                            maxVolInArea := areaVol
+                            maxVolInArea
+
+                    // Создать градиент на основе объема - НАМНОГО ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    areaSize = currentHvnEnd - currentHvnStart + 1
+                    if areaSize > 1
+                        // Отрисовка отдельных зон внутри HVN области
+                        for zoneIdx = currentHvnStart to currentHvnEnd by 1
+                            zoneTop = array.get(zoneBounds, zoneIdx)
+                            zoneBottom = zoneTop - gap
+                            zoneVol = array.get(vpRed, zoneIdx) + array.get(vpGreen, zoneIdx)
+
+                            // Расчет прозрачности - НАМНОГО ВЫШЕ для фона
+                            volumeRatio = maxVolInArea > minVolInArea ? (zoneVol - minVolInArea) / (maxVolInArea - minVolInArea) : 0
+                            zoneTransparency = int(82 + volumeRatio * 13) // Диапазон 82-95% прозрачности
+                            zoneTransparency := math.max(math.min(zoneTransparency, 95), 82)
+
+                            hvnBox = box.new(int(rightMax), zoneTop, int(rightMax + maxWidth), zoneBottom, bgcolor = color.new(hvnColor, zoneTransparency), border_color = color.new(hvnColor, 90), border_width = 1)
+                            array.push(lvnHvnBoxes, hvnBox)
+                    else // Одиночная зона HVN - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                        hvnBox = box.new(int(rightMax), topPrice, int(rightMax + maxWidth), bottomPrice, bgcolor = color.new(hvnColor, 90), border_color = color.new(hvnColor, 90), border_width = 1)
+                        array.push(lvnHvnBoxes, hvnBox)
+
+                    if showLvnHvnLabels
+                        midPrice = (topPrice + bottomPrice) / 2
+                        hvnLabel = label.new(int(rightMax) + int(maxWidth * 0.15), midPrice, 'HVN', color = color.new(color.black, 100), textcolor = color.new(color.white, 10), size = size.small, style = label.style_label_left)
+                        array.push(lvnHvnLabels, hvnLabel)
+
+                    currentHvnStart := zoneIndex
+                    currentHvnEnd := zoneIndex
+                    currentHvnEnd
+
+            // Отрисовка последней HVN зоны с градиентом на основе объема - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+            if currentHvnStart != -1
+                topPrice = array.get(zoneBounds, currentHvnStart)
+                bottomPrice = array.get(zoneBounds, currentHvnEnd) - gap
+
+                // Найти уровни объема внутри этой HVN зоны
+                float minVolInArea = 999999
+                float maxVolInArea = 0
+
+                for areaIdx = currentHvnStart to currentHvnEnd by 1
+                    areaVol = array.get(vpRed, areaIdx) + array.get(vpGreen, areaIdx)
+                    if areaVol < minVolInArea and areaVol > 0
+                        minVolInArea := areaVol
+                        minVolInArea
+                    if areaVol > maxVolInArea
+                        maxVolInArea := areaVol
+                        maxVolInArea
+
+                // Создать градиент на основе объема - НАМНОГО ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                areaSize = currentHvnEnd - currentHvnStart + 1
+                if areaSize > 1
+                    // Отрисовка отдельных зон внутри HVN области
+                    for zoneIdx = currentHvnStart to currentHvnEnd by 1
+                        zoneTop = array.get(zoneBounds, zoneIdx)
+                        zoneBottom = zoneTop - gap
+                        zoneVol = array.get(vpRed, zoneIdx) + array.get(vpGreen, zoneIdx)
+
+                        // Расчет прозрачности - НАМНОГО ВЫШЕ для фона
+                        volumeRatio = maxVolInArea > minVolInArea ? (zoneVol - minVolInArea) / (maxVolInArea - minVolInArea) : 0
+                        zoneTransparency = int(82 + volumeRatio * 13) // Диапазон 82-95% прозрачности
+                        zoneTransparency := math.max(math.min(zoneTransparency, 95), 82)
+
+                        hvnBox = box.new(int(rightMax), zoneTop, int(rightMax + maxWidth), zoneBottom, bgcolor = color.new(hvnColor, zoneTransparency), border_color = color.new(hvnColor, 90), border_width = 1)
+                        array.push(lvnHvnBoxes, hvnBox)
+                else // Одиночная зона HVN - ВЫСОКАЯ ПРОЗРАЧНОСТЬ
+                    hvnBox = box.new(int(rightMax), topPrice, int(rightMax + maxWidth), bottomPrice, bgcolor = color.new(hvnColor, 90), border_color = color.new(hvnColor, 90), border_width = 1)
+                    array.push(lvnHvnBoxes, hvnBox)
+
+                if showLvnHvnLabels
+                    midPrice = (topPrice + bottomPrice) / 2
+                    hvnLabel = label.new(int(rightMax) + int(maxWidth * 0.15), midPrice, 'HVN', color = color.new(color.black, 100), textcolor = color.new(color.white, 10), size = size.small, style = label.style_label_left)
+                    array.push(lvnHvnLabels, hvnLabel)
+
+// Функции очистки меток Фибоначчи
+_wrap(txt) =>
+    '(' + str.tostring(txt, format.mintick) + ')'
+
+_label_txt(level, price) =>
+    l = fibLevelsFormat == 'Percent' ? str.tostring(level * 100) + '%' : str.tostring(level)
+    (showFibLevels ? l : '') + (showFibPrices ? _wrap(price) : '')
+
+_draw_fib_label(price, txt, txtColor, leftMax) =>
+    x = fibLabelsPosition == 'Left' ? leftMax : bar_index - 1
+    labelStyle = fibLabelsPosition == 'Left' ? label.style_label_right : label.style_label_left
+    align = fibLabelsPosition == 'Left' ? text.align_right : text.align_left
+    labelsAlignStr = fibLabelsPosition == 'Left' ? txt + '\n' : '       ' + txt + '\n'
+    label.new(x = x, y = price, text = labelsAlignStr, textcolor = txtColor, style = labelStyle, textalign = align, color = color.new(color.black, 100))
+
+// Функция очистки линий Фибоначчи
+clearFibLines() =>
+    if array.size(currentFibLines) > 0
+        for i = 0 to array.size(currentFibLines) - 1 by 1
+            fibLevel = array.get(currentFibLines, i)
+            if not na(fibLevel.fibLine)
+                line.delete(fibLevel.fibLine)
+            if not na(fibLevel.fibLabel)
+                label.delete(fibLevel.fibLabel)
+        array.clear(currentFibLines)
+
+// Улучшенная функция определения тренда
+getTrendDirection(sessionHigh, sessionLow, sessionStart) =>
+    if not autoFibDirection
+        true // По умолчанию бычий/восходящий тренд, если автоопределение отключено
+    else // Определение тренда на основе прогрессии сессии и текущей позиции цены
+        sessionRange = sessionHigh - sessionLow
+        sessionMid = sessionLow + sessionRange * 0.5
+
+        // Проверить, где находится текущее закрытие относительно сессии
+        closePosition = (close - sessionLow) / sessionRange
+
+        // Проверить открытие vs закрытие сессии
+        sessionOpenPrice = close[lookback] // Цена в начале сессии
+        sessionClosePrice = close // Текущая цена
+
+        // Множественные критерии для определения тренда:
+        // 1. Позиция закрытия в диапазоне сессии (выше/ниже 50%)
+        // 2. Общее направление сессии (открытие vs закрытие)
+        // 3. Текущая цена vs середина сессии
+        priceAboveMid = close > sessionMid
+        sessionBullish = sessionClosePrice > sessionOpenPrice
+        closeInUpperHalf = closePosition > 0.5
+
+        // Сильный восходящий тренд, если закрытие в верхних 60% диапазона
+        strongUptrend = closePosition > 0.6
+        strongDowntrend = closePosition < 0.4
+
+        // Окончательное определение - бычий, если большинство критериев выполнено
+        bullishSignals = 0
+        if priceAboveMid
+            bullishSignals := bullishSignals + 1
+            bullishSignals
+        if sessionBullish
+            bullishSignals := bullishSignals + 1
+            bullishSignals
+        if closeInUpperHalf
+            bullishSignals := bullishSignals + 1
+            bullishSignals
+        if strongUptrend
+            bullishSignals := bullishSignals + 2 // Больший вес
+            bullishSignals
+        if strongDowntrend
+            bullishSignals := bullishSignals - 2 // Отрицательный вес
+            bullishSignals
+
+        finalUptrend = bullishSignals >= 2
+        finalUptrend
+
+// Функция обработки уровня Фибоначчи - ОБНОВЛЕНА ДЛЯ ДИНАМИЧЕСКИХ ЦВЕТОВ
+processFibLevel(level, levelPrice, levelColor, showLevel, leftMax, extend_setting) =>
+    if showLevel and showFib
+        // Определить окончательный цвет для использования
+        finalColor = levelColor
+
+        // Получить направление тренда для динамических цветов
+        isUptrend = getTrendDirection(profHigh, profLow, leftMax)
+
+        // Специальная обработка для уровней с динамическими цветами, когда пользователь выбрал белый (по умолчанию)
+        if levelColor == color.white
+            if level == 0.618
+                finalColor := isUptrend ? #FF0000 : color.rgb(255, 215, 0) // Красный в восходящем тренде, Золотой в нисходящем
+                finalColor
+            else if level == 0.650
+                finalColor := isUptrend ? #FF0000 : color.rgb(255, 215, 0) // Красный в восходящем тренде, Золотой в нисходящем
+                finalColor
+            else if level == 0.786
+                finalColor := isUptrend ? #FF0000 : color.rgb(255, 215, 0) // Красный в восходящем тренде, Золотой в нисходящем
+                finalColor
+            else if level == 0.886
+                finalColor := isUptrend ? #FF0000 : #00FF00 // Красный в восходящем тренде, Лаймовый Зеленый в нисходящем
+                finalColor
+
+        // Создание линии
+        newLine = line.new(leftMax, levelPrice, bar_index - 1, levelPrice, color = finalColor, width = level == 0.5 or level == 0.618 ? 2 : 1, style = level == 0.0 or level == 1.0 ? line.style_dotted : line.style_solid, extend = extend_setting)
+
+        // Создание метки
+        newLabel = _draw_fib_label(levelPrice, _label_txt(level, levelPrice), finalColor, leftMax)
+
+        // Сохранение в массиве для очистки
+        newFibLevel = FibLevel.new(newLine, newLabel, level, finalColor, showLevel)
+        array.push(currentFibLines, newFibLevel)
+
+// Улучшенный расчет и отрисовка Фибоначчи
+drawFibonacciLevels(sessionHigh, sessionLow, leftMax, isCurrentSession) =>
+    if showFib
+        // Определение тренда
+        isUptrend = getTrendDirection(sessionHigh, sessionLow, leftMax)
+
+        // Определение настройки продления
+        extend_setting = extend.none
+        if isCurrentSession and extendFibLines
+            extend_setting := extend.right
+            extend_setting
+
+        if isUptrend
+            // Бычий откат: 0% на минимуме, 100% на максимуме
+            priceRange = sessionHigh - sessionLow
+
+            // Обработка каждого уровня с правильными параметрами
+            processFibLevel(0.0, sessionLow, color_fib_0, show_fib_0, leftMax, extend_setting) // 0%
+            processFibLevel(0.236, sessionLow + priceRange * 0.236, color_fib_236, show_fib_236, leftMax, extend_setting) // 23.6%
+            processFibLevel(0.382, sessionLow + priceRange * 0.382, color_fib_382, show_fib_382, leftMax, extend_setting) // 38.2%
+            processFibLevel(0.50, sessionLow + priceRange * 0.50, color_fib_50, show_fib_50, leftMax, extend_setting) // 50%
+            processFibLevel(0.618, sessionLow + priceRange * 0.618, color_fib_618, show_fib_618, leftMax, extend_setting) // 61.8% - Теперь использует пользовательский цвет или динамический
+            processFibLevel(0.650, sessionLow + priceRange * 0.650, color_fib_650, show_fib_650, leftMax, extend_setting) // 65%
+            processFibLevel(0.786, sessionLow + priceRange * 0.786, color_fib_786, show_fib_786, leftMax, extend_setting) // 78.6%
+            processFibLevel(0.886, sessionLow + priceRange * 0.886, color_fib_886, show_fib_886, leftMax, extend_setting) // 88.6%
+            processFibLevel(1.0, sessionHigh, color_fib_100, show_fib_100, leftMax, extend_setting) // 100%
+        else // Медвежий откат: 0% на максимуме, 100% на минимуме
+            priceRange = sessionHigh - sessionLow
+
+            // Обработка каждого уровня с правильными параметрами (инвертировано)
+            processFibLevel(0.0, sessionHigh, color_fib_0, show_fib_0, leftMax, extend_setting) // 0%
+            processFibLevel(0.236, sessionHigh - priceRange * 0.236, color_fib_236, show_fib_236, leftMax, extend_setting) // 23.6%
+            processFibLevel(0.382, sessionHigh - priceRange * 0.382, color_fib_382, show_fib_382, leftMax, extend_setting) // 38.2%
+            processFibLevel(0.50, sessionHigh - priceRange * 0.50, color_fib_50, show_fib_50, leftMax, extend_setting) // 50%
+            processFibLevel(0.618, sessionHigh - priceRange * 0.618, color_fib_618, show_fib_618, leftMax, extend_setting) // 61.8% - Теперь использует пользовательский цвет или динамический
+            processFibLevel(0.650, sessionHigh - priceRange * 0.650, color_fib_650, show_fib_650, leftMax, extend_setting) // 65%
+            processFibLevel(0.786, sessionHigh - priceRange * 0.786, color_fib_786, show_fib_786, leftMax, extend_setting) // 78.6%
+            processFibLevel(0.886, sessionHigh - priceRange * 0.886, color_fib_886, show_fib_886, leftMax, extend_setting) // 88.6%
+drawNewZone(update) =>
+    if bar_index > lookback and update and zoneStart > 0 and array.sum(vpGreen) + array.sum(vpRed) > 0
+        gap = (profHigh - profLow) / resolution
+        float leftMax = bar_index[lookback]
+        float rightMax = bar_index[int(lookback / 1.4)]
+        float rightMaxVol = array.max(vpGreen) + array.max(vpRed)
+        float buffer = gap / 10
+
+        if showLabels
+            labelText = sessionType // Упрощено - больше не показывает метод, так как он более тонкий
+            label.new((bar_index - 1 + int(leftMax)) / 2, profHigh, labelText, color = color.rgb(0, 0, 0, 100), textcolor = chart.fg_color, size = size.normal)
+
+        if showProf
+            for i = 0 to array.size(vpRed) - 1 by 1
+                greenEnd = int(leftMax + (rightMax - leftMax) * (array.get(vpGreen, i) / rightMaxVol))
+                redEnd = int(greenEnd + (rightMax - leftMax) * (array.get(vpRed, i) / rightMaxVol))
+                if dispMode == 'Mode 1'
+                    box.new(int(leftMax), array.get(zoneBounds, i) - buffer, greenEnd, array.get(zoneBounds, i) - gap + buffer, bgcolor = bullCol, border_width = 0)
+                    box.new(greenEnd, array.get(zoneBounds, i) - buffer, redEnd, array.get(zoneBounds, i) - gap + buffer, bgcolor = bearCol, border_width = 0)
+
+                    // Добавление процентов в Mode 1
+                    if showMode12Percentages
+                        greenVol = array.get(vpGreen, i)
+                        redVol = array.get(vpRed, i)
+                        totalNodeVol = greenVol + redVol
+
+                        if totalNodeVol > 0 and totalNodeVol > rightMaxVol * 0.02
+                            bullPercent = greenVol / totalNodeVol * 100
+                            bearPercent = redVol / totalNodeVol * 100
+                            nodeMidPrice = array.get(zoneBounds, i) - gap / 2
+
+                            // Процент быков в ЦЕНТРЕ зеленого бокса
+                            if greenVol > 0
+                                bullCenter = int(leftMax + (greenEnd - leftMax) / 2)
+                                bullLabel = label.new(bullCenter, nodeMidPrice, str.tostring(bullPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_center)
+                                bullLabel
+
+                            // Процент медведей в ЦЕНТРЕ красного бокса
+                            if redVol > 0
+                                bearCenter = int(greenEnd + (redEnd - greenEnd) / 2)
+                                bearLabel = label.new(bearCenter, nodeMidPrice, str.tostring(bearPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_center)
+                                bearLabel
+                else // Улучшенный Mode 2 с процентами быков/медведей
+                    box.new(int(leftMax), array.get(zoneBounds, i) - buffer, greenEnd, array.get(zoneBounds, i) - gap + buffer, bgcolor = bullCol, border_width = 0)
+                    box.new(int(leftMax) - redEnd + greenEnd, array.get(zoneBounds, i) - buffer, int(leftMax), array.get(zoneBounds, i) - gap + buffer, bgcolor = bearCol, border_width = 0)
+
+                    // Расчет процентов быков/медведей для этого узла
+                    greenVol = array.get(vpGreen, i)
+                    redVol = array.get(vpRed, i)
+                    totalNodeVol = greenVol + redVol
+
+                    if totalNodeVol > 0 and showMode12Percentages
+                        bullPercent = greenVol / totalNodeVol * 100
+                        bearPercent = redVol / totalNodeVol * 100
+                        nodeMidPrice = array.get(zoneBounds, i) - gap / 2
+
+                        // Показывать проценты только при значительном объеме (избегать загромождения)
+                        if totalNodeVol > rightMaxVol * 0.02 // Показывать только если узел имеет >2% от максимального объема
+                            // Процент медведей СЛЕВА от красного бокса - более близкое позиционирование
+                            if redVol > 0
+                                bearLabel = label.new(int(leftMax) - redEnd + greenEnd - mode12TextDistance, nodeMidPrice, str.tostring(bearPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_right)
+                                bearLabel
+
+                            // Процент быков СПРАВА от зеленого бокса - более близкое позиционирование  
+                            if greenVol > 0
+                                bullLabel = label.new(greenEnd + mode12TextDistance, nodeMidPrice, str.tostring(bullPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_left)
+                                bullLabel
+
+        if showSbox
+            box.new(int(leftMax), profHigh, bar_index - 1, profLow, chart.fg_color, boxWid, line.style_dashed, bgcolor = boxBg)
+
+        poc = pocLevel()
+        [val, vah] = valueLevels(poc)
+
+        // Отрисовка стандартных линий (без продления для исторических сессий для уменьшения загромождения)
+        if showPoc
+            line.new(int(leftMax), poc, bar_index - 1, poc, color = pocCol, width = pocWid)
+        if showVA
+            line.new(int(leftMax), vah, bar_index - 1, vah, color = vahCol, width = vahWid)
+            line.new(int(leftMax), val, bar_index - 1, val, color = valCol, width = valWid)
+        if showVAb
+            box.new(int(leftMax), vah, bar_index - 1, val, border_color = color.rgb(54, 58, 69, 100), bgcolor = VAbCol)
+
+        // Отрисовка уровней Фибоначчи (без продления для исторических сессий)
+        drawFibonacciLevels(profHigh, profLow, int(leftMax), false)
+
+        // Отрисовка зон LVN/HVN для исторических сессий
+        drawLvnHvnAreas(int(leftMax), bar_index - 1)
+
+drawCurZone(update, delete) =>
+    var line pocLine = na
+    var line vahLine = na
+    var line valLine = na
+    var box outBox = na
+    var label sessionLab = na
+
+    var redBoxes = array.new_box(array.size(vpRed), na)
+    var greenBoxes = array.new_box(array.size(vpRed), na)
+
+    if bar_index > lookback and update and zoneStart > 0 and array.sum(vpGreen) + array.sum(vpRed) > 0
+        //Очистка предыдущих линий и боксов
+        if not na(pocLine)
+            line.delete(pocLine)
+        if not na(vahLine)
+            line.delete(vahLine)
+        if not na(valLine)
+            line.delete(valLine)
+        if not na(outBox)
+            box.delete(outBox)
+        if not na(sessionLab)
+            label.delete(sessionLab)
+
+        // Очистка предыдущих линий Фибоначчи
+        clearFibLines()
+
+        // Очистка предыдущих зон LVN/HVN
+        clearLvnHvnAreas()
+
+        for i = 0 to array.size(redBoxes) - 1 by 1
+            if not na(array.get(redBoxes, i))
+                box.delete(array.get(redBoxes, i))
+                box.delete(array.get(greenBoxes, i))
+
+        gap = (profHigh - profLow) / resolution
+        float leftMax = bar_index[lookback]
+        float rightMax = bar_index[int(lookback / 1.4)]
+        float rightMaxVol = array.max(vpGreen) + array.max(vpRed)
+        float buffer = gap / 10
+
+        if showLabels
+            labelText = sessionType // Упрощено - больше не показывает метод, так как он более тонкий
+            sessionLab := label.new((bar_index - 1 + int(leftMax)) / 2, profHigh, labelText, color = color.rgb(0, 0, 0, 100), textcolor = chart.fg_color, size = size.normal)
+            sessionLab
+
+        if showProf
+            for i = 0 to array.size(vpRed) - 1 by 1
+                greenEnd = int(leftMax + (rightMax - leftMax) * (array.get(vpGreen, i) / rightMaxVol))
+                redEnd = int(greenEnd + (rightMax - leftMax) * (array.get(vpRed, i) / rightMaxVol))
+                if dispMode == 'Mode 1'
+                    array.set(greenBoxes, i, box.new(int(leftMax), array.get(zoneBounds, i) - buffer, greenEnd, array.get(zoneBounds, i) - gap + buffer, bgcolor = bullCol, border_width = 0))
+                    array.set(redBoxes, i, box.new(greenEnd, array.get(zoneBounds, i) - buffer, redEnd, array.get(zoneBounds, i) - gap + buffer, bgcolor = bearCol, border_width = 0))
+
+                    // Добавление процентов в Mode 1 для LIVE зоны
+                    if showMode12Percentages
+                        greenVol = array.get(vpGreen, i)
+                        redVol = array.get(vpRed, i)
+                        totalNodeVol = greenVol + redVol
+
+                        if totalNodeVol > 0 and totalNodeVol > rightMaxVol * 0.02
+                            bullPercent = greenVol / totalNodeVol * 100
+                            bearPercent = redVol / totalNodeVol * 100
+                            nodeMidPrice = array.get(zoneBounds, i) - gap / 2
+
+                            // Процент быков в ЦЕНТРЕ зеленого бокса
+                            if greenVol > 0
+                                bullCenter = int(leftMax + (greenEnd - leftMax) / 2)
+                                bullLabel = label.new(bullCenter, nodeMidPrice, str.tostring(bullPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_center)
+                                bullLabel
+
+                            // Процент медведей в ЦЕНТРЕ красного бокса
+                            if redVol > 0
+                                bearCenter = int(greenEnd + (redEnd - greenEnd) / 2)
+                                bearLabel = label.new(bearCenter, nodeMidPrice, str.tostring(bearPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_center)
+                                bearLabel
+                else // Улучшенный Mode 2 с процентами быков/медведей для LIVE зоны
+                    array.set(greenBoxes, i, box.new(int(leftMax), array.get(zoneBounds, i) - buffer, greenEnd, array.get(zoneBounds, i) - gap + buffer, bgcolor = bullCol, border_width = 0))
+                    array.set(redBoxes, i, box.new(int(leftMax) - redEnd + greenEnd, array.get(zoneBounds, i) - buffer, int(leftMax), array.get(zoneBounds, i) - gap + buffer, bgcolor = bearCol, border_width = 0))
+
+                    // Расчет процентов быков/медведей для этого узла
+                    greenVol = array.get(vpGreen, i)
+                    redVol = array.get(vpRed, i)
+                    totalNodeVol = greenVol + redVol
+
+                    if totalNodeVol > 0 and showMode12Percentages
+                        bullPercent = greenVol / totalNodeVol * 100
+                        bearPercent = redVol / totalNodeVol * 100
+                        nodeMidPrice = array.get(zoneBounds, i) - gap / 2
+
+                        // Показывать проценты только при значительном объеме (избегать загромождения)
+                        if totalNodeVol > rightMaxVol * 0.02 // Показывать только если узел имеет >2% от максимального объема
+                            // Процент медведей СЛЕВА от красного бокса - более близкое позиционирование
+                            if redVol > 0
+                                bearLabel = label.new(int(leftMax) - redEnd + greenEnd - mode12TextDistance, nodeMidPrice, str.tostring(bearPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_right)
+                                bearLabel
+
+                            // Процент быков СПРАВА от зеленого бокса - более близкое позиционирование  
+                            if greenVol > 0
+                                bullLabel = label.new(greenEnd + mode12TextDistance, nodeMidPrice, str.tostring(bullPercent, '#') + '%', color = color.new(color.black, 100), textcolor = color.white, size = size.normal, style = label.style_label_left)
+                                bullLabel
+
+        if showSbox
+            outBox := box.new(int(leftMax), profHigh, bar_index - 1, profLow, chart.fg_color, boxWid, line.style_dashed, bgcolor = boxBg)
+            outBox
+
+        poc = pocLevel()
+        [val, vah] = valueLevels(poc)
+
+        // Отрисовка продленных линий только для текущей сессии (на основе пользовательских настроек)
+        if showPoc
+            pocLine := line.new(int(leftMax), poc, bar_index - 1, poc, color = pocCol, width = pocWid, extend = extendLines ? extend.right : extend.none)
+            pocLine
+        if showVA
+            vahLine := line.new(int(leftMax), vah, bar_index - 1, vah, color = vahCol, width = vahWid, extend = extendLines ? extend.right : extend.none)
+            valLine := line.new(int(leftMax), val, bar_index - 1, val, color = valCol, width = valWid, extend = extendLines ? extend.right : extend.none)
+            valLine
+        if showVAb
+            box.new(int(leftMax), vah, bar_index - 1, val, border_color = color.rgb(54, 58, 69, 100), bgcolor = VAbCol)
+
+        // Отрисовка живых уровней Фибоначчи с продлением на основе пользовательских настроек
+        drawFibonacciLevels(profHigh, profLow, int(leftMax), true)
+
+        // Отрисовка зон LVN/HVN для текущей сессии
+        drawLvnHvnAreas(int(leftMax), bar_index - 1)
+
+    if delete
+        box.delete(outBox)
+        line.delete(pocLine)
+        line.delete(vahLine)
+        line.delete(valLine)
+
+        // Очистка линий Фибоначчи при завершении сессии
+        clearFibLines()
+
+        // Очистка зон LVN/HVN при завершении сессии
+        clearLvnHvnAreas()
+
+        for i = 0 to array.size(greenBoxes) - 1 by 1
+            box.delete(array.get(greenBoxes, i))
+        for i = 0 to array.size(redBoxes) - 1 by 1
+            box.delete(array.get(redBoxes, i))
+
+drawForexBox(startBar, title, top, bottom) =>
+    box.new(int(startBar), top, bar_index - 1, bottom, chart.fg_color, boxWid, line.style_dashed, bgcolor = boxBg)
+    if showLabels
+        label.new((bar_index - 1 + int(startBar)) / 2, top, title, color = color.rgb(0, 0, 0, 100), textcolor = chart.fg_color)
+
+combArray(arr1, arr2) =>
+    out = array.copy(arr1)
+    if array.size(arr2) > 0
+        for i = 0 to array.size(arr2) - 1 by 1
+            array.push(out, array.get(arr2, i))
+    out
+
+// ВОЗВРАТ К ОРИГИНАЛУ - Простой сбор данных
+updateIntra(o, h, l, c, v) =>
+    if array.size(o) > 0
+        for i = 0 to array.size(o) - 1 by 1
+            array.push(ltfOpen, array.get(o, i))
+            array.push(ltfHigh, array.get(h, i))
+            array.push(ltfLow, array.get(l, i))
+            array.push(ltfClose, array.get(c, i))
+            array.push(ltfVolume, array.get(v, i))
+
+//==========================
+// ОСНОВНЫЕ РАСЧЕТЫ
+//==========================
+
+//Обнаружение различных начальных дат
+newDaily = dayofweek != dayofweek[1]
+newWeekly = weekofyear != weekofyear[1]
+newMonthly = dayofmonth != dayofmonth[1] + 1 and dayofmonth != dayofmonth[1]
+newYearly = year != year[1]
+newQuarterly = month != month[1] and (month - 1) % 3 == 0
+
+utcHour = hour(time(timeframe.period, '0000-2400', 'GMT'), 'GMT')
+
+// Основные торговые сессии (UTC время)
+newSydney = utcHour >= 21 and utcHour[1] < 21
+endSydney = utcHour >= 6 and utcHour[1] < 6
+
+newTokyo = utcHour == 0 and utcHour[1] == 23 or utcHour >= 0 and utcHour[1] >= 23
+endTokyo = utcHour >= 9 and utcHour[1] < 9
+
+newAsian = utcHour >= 21 and utcHour[1] < 21 // Начало Сиднея (более широкая Азиатская сессия)
+endAsian = utcHour >= 9 and utcHour[1] < 9 // Окончание Токио
+
+newFrankfurt = utcHour >= 6 and utcHour[1] < 6
+endFrankfurt = utcHour >= 15 and utcHour[1] < 15
+
+newLondon = utcHour >= 7 and utcHour[1] < 7
+endLondon = utcHour >= 16 and utcHour[1] < 16
+
+newEuropean = utcHour >= 6 and utcHour[1] < 6 // Начало Франкфурта (более широкая Европейская сессия)
+endEuropean = utcHour >= 16 and utcHour[1] < 16 // Окончание Лондона
+
+newNewYork = utcHour >= 13 and utcHour[1] < 13
+endNewYork = utcHour >= 22 and utcHour[1] < 22
+
+newUSExtended = utcHour >= 9 and utcHour[1] < 9 // Начало премаркета
+endUSExtended = utcHour >= 1 and utcHour[1] < 1 // Окончание афтермаркета (следующий день)
+
+// Перекрывающиеся сессии
+newAsiaLondonOverlap = utcHour >= 7 and utcHour[1] < 7
+endAsiaLondonOverlap = utcHour >= 9 and utcHour[1] < 9
+
+newLondonNYOverlap = utcHour >= 13 and utcHour[1] < 13
+endLondonNYOverlap = utcHour >= 16 and utcHour[1] < 16
+
+newSession = switch sessionType
+    'Sydney' => newSydney
+    'Tokyo' => newTokyo
+    'Asian' => newAsian
+    'Frankfurt' => newFrankfurt
+    'London' => newLondon
+    'European' => newEuropean
+    'New York' => newNewYork
+    'US Extended' => newUSExtended
+    'Asia-London Overlap' => newAsiaLondonOverlap
+    'London-NY Overlap' => newLondonNYOverlap
+    'Daily' => newDaily
+    'Weekly' => newWeekly
+    'Monthly' => newMonthly
+    'Yearly' => newYearly
+    'Quarterly' => newQuarterly
+    => newDaily
+
+zoneEnd = switch sessionType
+    'Sydney' => endSydney
+    'Tokyo' => endTokyo
+    'Asian' => endAsian
+    'Frankfurt' => endFrankfurt
+    'London' => endLondon
+    'European' => endEuropean
+    'New York' => endNewYork
+    'US Extended' => endUSExtended
+    'Asia-London Overlap' => endAsiaLondonOverlap
+    'London-NY Overlap' => endLondonNYOverlap
+    'Daily' => newDaily
+    'Weekly' => newWeekly
+    'Monthly' => newMonthly
+    'Yearly' => newYearly
+    'Quarterly' => newQuarterly
+    => newDaily
+
+isForex = showFx == true
+
+//Пересчет и отрисовка зон
+calcSession(zoneEnd == true or barstate.islast and showCur == true)
+drawNewZone(zoneEnd == true)
+drawCurZone(barstate.islast and not(zoneEnd == true) and showCur == true and activeZone == true, zoneEnd == true)
+
+//Сброс профиля в начале новой зоны
+resetProfile(newSession == true)
+
+//Обновление массивов данных
+updateIntra(dO, dH, dL, dC, dV)
+
+//Сброс значения начала зоны
+if zoneEnd == true
+    activeZone := false
+    activeZone
+
+if newSession == true
+    zoneStart := bar_index
+    activeZone := true
+    activeZone
+
+// Отслеживание начала отдельных сессий
+if newSydney == true
+    sydneyStart := bar_index
+    sydneyStart
+if newTokyo == true
+    tokyoStart := bar_index
+    tokyoStart
+if newAsian == true
+    asianStart := bar_index
+    asianStart
+if newFrankfurt == true
+    frankfurtStart := bar_index
+    frankfurtStart
+if newLondon == true
+    londonStart := bar_index
+    londonStart
+if newEuropean == true
+    europeanStart := bar_index
+    europeanStart
+if newNewYork == true
+    nyStart := bar_index
+    nyStart
+if newUSExtended == true
+    usExtendedStart := bar_index
+    usExtendedStart
+if newAsiaLondonOverlap == true
+    asiaLondonStart := bar_index
+    asiaLondonStart
+if newLondonNYOverlap == true
+    londonNYStart := bar_index
+    londonNYStart
+
+// Безопасные исторические расчеты с проверкой границ для всех сессий - контролируемые пользователем
+_maxSessionBars = maxLookbackBars // Контролируемый пользователем лимит
+_sydneyLength = sydneyStart > 0 and bar_index >= sydneyStart ? math.min(math.min(bar_index - sydneyStart + 1, _maxSessionBars), 5000) : 1
+_tokyoLength = tokyoStart > 0 and bar_index >= tokyoStart ? math.min(math.min(bar_index - tokyoStart + 1, _maxSessionBars), 5000) : 1
+_asianLength = asianStart > 0 and bar_index >= asianStart ? math.min(math.min(bar_index - asianStart + 1, _maxSessionBars), 5000) : 1
+_frankfurtLength = frankfurtStart > 0 and bar_index >= frankfurtStart ? math.min(math.min(bar_index - frankfurtStart + 1, _maxSessionBars), 5000) : 1
+_londonLength = londonStart > 0 and bar_index >= londonStart ? math.min(math.min(bar_index - londonStart + 1, _maxSessionBars), 5000) : 1
+_europeanLength = europeanStart > 0 and bar_index >= europeanStart ? math.min(math.min(bar_index - europeanStart + 1, _maxSessionBars), 5000) : 1
+_nyLength = nyStart > 0 and bar_index >= nyStart ? math.min(math.min(bar_index - nyStart + 1, _maxSessionBars), 5000) : 1
+_usExtendedLength = usExtendedStart > 0 and bar_index >= usExtendedStart ? math.min(math.min(bar_index - usExtendedStart + 1, _maxSessionBars), 5000) : 1
+_asiaLondonLength = asiaLondonStart > 0 and bar_index >= asiaLondonStart ? math.min(math.min(bar_index - asiaLondonStart + 1, _maxSessionBars), 5000) : 1
+_londonNYLength = londonNYStart > 0 and bar_index >= londonNYStart ? math.min(math.min(bar_index - londonNYStart + 1, _maxSessionBars), 5000) : 1
+
+_sydneyHigh = ta.highest(high, _sydneyLength)
+_tokyoHigh = ta.highest(high, _tokyoLength)
+_asianHigh = ta.highest(high, _asianLength)
+_frankfurtHigh = ta.highest(high, _frankfurtLength)
+_londonHigh = ta.highest(high, _londonLength)
+_europeanHigh = ta.highest(high, _europeanLength)
+_nyHigh = ta.highest(high, _nyLength)
+_usExtendedHigh = ta.highest(high, _usExtendedLength)
+_asiaLondonHigh = ta.highest(high, _asiaLondonLength)
+_londonNYHigh = ta.highest(high, _londonNYLength)
+
+_sydneyLow = ta.lowest(low, _sydneyLength)
+_tokyoLow = ta.lowest(low, _tokyoLength)
+_asianLow = ta.lowest(low, _asianLength)
+_frankfurtLow = ta.lowest(low, _frankfurtLength)
+_londonLow = ta.lowest(low, _londonLength)
+_europeanLow = ta.lowest(low, _europeanLength)
+_nyLow = ta.lowest(low, _nyLength)
+_usExtendedLow = ta.lowest(low, _usExtendedLength)
+_asiaLondonLow = ta.lowest(low, _asiaLondonLength)
+_londonNYLow = ta.lowest(low, _londonNYLength)
+
+sydneyHigh = sydneyStart > 0 ? _sydneyHigh : high
+tokyoHigh = tokyoStart > 0 ? _tokyoHigh : high
+asianHigh = asianStart > 0 ? _asianHigh : high
+frankfurtHigh = frankfurtStart > 0 ? _frankfurtHigh : high
+londonHigh = londonStart > 0 ? _londonHigh : high
+europeanHigh = europeanStart > 0 ? _europeanHigh : high
+nyHigh = nyStart > 0 ? _nyHigh : high
+usExtendedHigh = usExtendedStart > 0 ? _usExtendedHigh : high
+asiaLondonHigh = asiaLondonStart > 0 ? _asiaLondonHigh : high
+londonNYHigh = londonNYStart > 0 ? _londonNYHigh : high
+
+sydneyLow = sydneyStart > 0 ? _sydneyLow : low
+tokyoLow = tokyoStart > 0 ? _tokyoLow : low
+asianLow = asianStart > 0 ? _asianLow : low
+frankfurtLow = frankfurtStart > 0 ? _frankfurtLow : low
+londonLow = londonStart > 0 ? _londonLow : low
+europeanLow = europeanStart > 0 ? _europeanLow : low
+nyLow = nyStart > 0 ? _nyLow : low
+usExtendedLow = usExtendedStart > 0 ? _usExtendedLow : low
+asiaLondonLow = asiaLondonStart > 0 ? _asiaLondonLow : low
+londonNYLow = londonNYStart > 0 ? _londonNYLow : low
+
+// Отрисовка боксов форекс сессий для всех сессий
+if endSydney == true and isForex and sydneyStart > 0
+    drawForexBox(sydneyStart, 'Sydney', sydneyHigh, sydneyLow)
+if endTokyo == true and isForex and tokyoStart > 0
+    drawForexBox(tokyoStart, 'Tokyo', tokyoHigh, tokyoLow)
+if endAsian == true and isForex and asianStart > 0
+    drawForexBox(asianStart, 'Asian', asianHigh, asianLow)
+if endFrankfurt == true and isForex and frankfurtStart > 0
+    drawForexBox(frankfurtStart, 'Frankfurt', frankfurtHigh, frankfurtLow)
+if endLondon == true and isForex and londonStart > 0
+    drawForexBox(londonStart, 'London', londonHigh, londonLow)
+if endEuropean == true and isForex and europeanStart > 0
+    drawForexBox(europeanStart, 'European', europeanHigh, europeanLow)
+if endNewYork == true and isForex and nyStart > 0
+    drawForexBox(nyStart, 'New York', nyHigh, nyLow)
+if endUSExtended == true and isForex and usExtendedStart > 0
+    drawForexBox(usExtendedStart, 'US Extended', usExtendedHigh, usExtendedLow)
+if endAsiaLondonOverlap == true and isForex and asiaLondonStart > 0
+    drawForexBox(asiaLondonStart, 'Asia-London', asiaLondonHigh, asiaLondonLow)
+if endLondonNYOverlap == true and isForex and londonNYStart > 0
+    drawForexBox(londonNYStart, 'London-NY', londonNYHigh, londonNYLow)
+
+//==========================
+// УРОВНИ VOLUME PROFILE ДЛЯ АЛЕРТОВ И СИГНАЛОВ
+//==========================
+
+// Расчет уровней VP для алертов и сигналов
+vpPOC = activeZone and zoneStart > 0 ? pocLevel() : na
+
+// Расчет Value Area для алертов и сигналов
+var float vpVAH = na
+var float vpVAL = na
+if activeZone and zoneStart > 0
+    [tempVAL, tempVAH] = valueLevels(pocLevel())
+    vpVAH := tempVAH
+    vpVAL := tempVAL
+    vpVAL
+
+// Расчет пользовательского уровня Фибоначчи для алертов
+fibPrice = activeZone and zoneStart > 0 ? profLow + (profHigh - profLow) * customFibLevel : na
+
+// Обнаружение пересечений для алертов (рассчитывается на каждом баре)
+pocCrossUp = ta.crossover(close, vpPOC)
+pocCrossDown = ta.crossunder(close, vpPOC)
+vahCrossUp = ta.crossover(close, vpVAH)
+vahCrossDown = ta.crossunder(close, vpVAH)
+valCrossUp = ta.crossover(close, vpVAL)
+valCrossDown = ta.crossunder(close, vpVAL)
+fibCrossUp = ta.crossover(close, fibPrice)
+fibCrossDown = ta.crossunder(close, fibPrice)
+
+//==========================
+// ЛОГИКА СИГНАЛОВ ПОКУПКИ/ПРОДАЖИ (УПРОЩЕННАЯ)
+//==========================
+
+// Расчет ATR для определения размера свечи
+currentATR = ta.atr(14)
+
+// Вспомогательная функция для проверки близости цены к ключевому уровню
+isNearKeyLevel(price, tolerance) =>
+    toleranceValue = price * tolerance
+    nearLevel = false
+
+    // Проверка уровней VP
+    if not na(vpPOC) and math.abs(price - vpPOC) <= toleranceValue
+        nearLevel := true
+        nearLevel
+    if not na(vpVAH) and math.abs(price - vpVAH) <= toleranceValue
+        nearLevel := true
+        nearLevel
+    if not na(vpVAL) and math.abs(price - vpVAL) <= toleranceValue
+        nearLevel := true
+        nearLevel
+
+    // Проверка уровней Фибоначчи, если активны
+    if showFib and activeZone and zoneStart > 0
+        sessionRange = profHigh - profLow
+        fib236 = profLow + sessionRange * 0.236
+        fib382 = profLow + sessionRange * 0.382
+        fib50 = profLow + sessionRange * 0.50
+        fib618 = profLow + sessionRange * 0.618
+        fib786 = profLow + sessionRange * 0.786
+
+        if math.abs(price - fib236) <= toleranceValue or math.abs(price - fib382) <= toleranceValue or math.abs(price - fib50) <= toleranceValue or math.abs(price - fib618) <= toleranceValue or math.abs(price - fib786) <= toleranceValue
+            nearLevel := true
+            nearLevel
+
+    // Проверка уровней ордер блоков
+    if array.size(_bullBoxes) > 0
+        for i = 0 to array.size(_bullBoxes) - 1 by 1
+            if not na(array.get(_bullBoxes, i))
+                boxTop = box.get_top(array.get(_bullBoxes, i))
+                boxBottom = box.get_bottom(array.get(_bullBoxes, i))
+                if price >= boxBottom - toleranceValue and price <= boxTop + toleranceValue
+                    nearLevel := true
+                    break
+
+    if array.size(_bearBoxes) > 0
+        for i = 0 to array.size(_bearBoxes) - 1 by 1
+            if not na(array.get(_bearBoxes, i))
+                boxTop = box.get_top(array.get(_bearBoxes, i))
+                boxBottom = box.get_bottom(array.get(_bearBoxes, i))
+                if price >= boxBottom - toleranceValue and price <= boxTop + toleranceValue
+                    nearLevel := true
+                    break
+
+    nearLevel
+
+// Расчет свойств свечи
+currentCandleSize = high - low
+prevCandleSize = high[1] - low[1]
+currentIsBullish = close > open
+currentIsBearish = close < open
+prevIsBullish = close[1] > open[1]
+prevIsBearish = close[1] < open[1]
+
+// Логика сигнала ПОКУПКИ: Большая медвежья свеча + бычий разворот выше порога на ключевой поддержке
+buySetupCandle = prevIsBearish and prevCandleSize >= currentATR * signalMinCandleSize
+buyReversalCandle = currentIsBullish and buySetupCandle
+buyReversalLevel = low[1] + (high[1] - low[1]) * (signalReversalThreshold / 100.0)
+buyReversalConfirmed = buyReversalCandle and close >= buyReversalLevel
+buyAtKeyLevel = isNearKeyLevel(low[1], signalLevelTolerance) or isNearKeyLevel(close, signalLevelTolerance)
+
+// Логика сигнала ПРОДАЖИ: Большая бычья свеча + медвежий разворот ниже порога на ключевом сопротивлении  
+sellSetupCandle = prevIsBullish and prevCandleSize >= currentATR * signalMinCandleSize
+sellReversalCandle = currentIsBearish and sellSetupCandle
+sellReversalLevel = high[1] - (high[1] - low[1]) * (signalReversalThreshold / 100.0)
+sellReversalConfirmed = sellReversalCandle and close <= sellReversalLevel
+sellAtKeyLevel = isNearKeyLevel(high[1], signalLevelTolerance) or isNearKeyLevel(close, signalLevelTolerance)
+
+// УПРОЩЕНО: Только один тип сигнала - работает везде на любых ключевых уровнях
+buySignal = enableSignals and buyReversalConfirmed and buyAtKeyLevel
+sellSignal = enableSignals and sellReversalConfirmed and sellAtKeyLevel
+
+// Комбинированные сигналы для алертов и визуального отображения
+buySignalAtLevel := buySignal
+sellSignalAtLevel := sellSignal
+
+//==========================
+// УЛУЧШЕННАЯ СИСТЕМА АЛЕРТОВ С КОМПЛЕКСНЫМИ ДАННЫМИ РЫНКА
+//==========================
+
+// Переменные состояния алертов
+var bool inLvnArea = false
+var bool inHvnArea = false
+var bool inNPOCArea = false
+
+// Флаги алертов текущего бара
+lvnEntryAlert = false
+hvnEntryAlert = false
+npocEntryAlert = false
+
+// Обнаружение зон LVN/HVN для алертов
+if enableLvnHvnAlerts and enableComplexCalculations and activeZone and zoneStart > 0 and array.sum(vpGreen) + array.sum(vpRed) > 0
+    [lvnZones, hvnZones, singlePrintZones] = detectLvnHvn()
+    gap = (profHigh - profLow) / resolution
+
+    currentInLvn = false
+    currentInHvn = false
+    currentInNPOC = false
+
+    // Проверить, находится ли текущая цена в зоне LVN
+    if array.size(lvnZones) > 0
+        for i = 0 to array.size(lvnZones) - 1 by 1
+            zoneIndex = array.get(lvnZones, i)
+            zoneTop = array.get(zoneBounds, zoneIndex)
+            zoneBottom = zoneTop - gap
+
+            if close >= zoneBottom and close <= zoneTop
+                currentInLvn := true
+                break
+
+    // Проверить, находится ли текущая цена в зоне HVN
+    if array.size(hvnZones) > 0
+        for i = 0 to array.size(hvnZones) - 1 by 1
+            zoneIndex = array.get(hvnZones, i)
+            zoneTop = array.get(zoneBounds, zoneIndex)
+            zoneBottom = zoneTop - gap
+
+            if close >= zoneBottom and close <= zoneTop
+                currentInHvn := true
+                break
+
+    // Проверить, находится ли текущая цена в зоне NPOC
+    if array.size(singlePrintZones) > 0
+        for i = 0 to array.size(singlePrintZones) - 1 by 1
+            zoneIndex = array.get(singlePrintZones, i)
+            zoneTop = array.get(zoneBounds, zoneIndex)
+            zoneBottom = zoneTop - gap
+
+            if close >= zoneBottom and close <= zoneTop
+                currentInNPOC := true
+                break
+
+    // Обнаружение входа в зоны LVN/HVN/NPOC
+    lvnEntryAlert := currentInLvn and not inLvnArea
+    hvnEntryAlert := currentInHvn and not inHvnArea
+    npocEntryAlert := currentInNPOC and not inNPOCArea
+
+    inLvnArea := currentInLvn
+    inHvnArea := currentInHvn
+    inNPOCArea := currentInNPOC
+    inNPOCArea
+
+// Алерты Volume Profile с комплексными данными рынка
+if enableVPAlerts and activeZone and not na(vpPOC) and not na(vpVAH) and not na(vpVAL)
+    if pocCrossUp or pocCrossDown
+        alert(syminfo.ticker + ' (' + timeframe.period + ') POC HIT ' + (close > vpPOC ? 'ABOVE' : 'BELOW') + ' | Price:' + str.tostring(close) + ' | VAL:' + str.tostring(vpVAL) + ' POC:' + str.tostring(vpPOC) + ' VAH:' + str.tostring(vpVAH) + ' ' + (close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)') + ' | Session:' + sessionType + ' | Trend:' + (getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH') + ' | Pos:' + str.tostring(profHigh - profLow > 0 ? (close - profLow) / (profHigh - profLow) * 100 : 50, '#') + '%', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+    if vahCrossUp or vahCrossDown
+        alert(syminfo.ticker + ' (' + timeframe.period + ') VAH HIT ' + (close > vpVAH ? 'ABOVE' : 'BELOW') + ' | Price:' + str.tostring(close) + ' | VAL:' + str.tostring(vpVAL) + ' POC:' + str.tostring(vpPOC) + ' VAH:' + str.tostring(vpVAH) + ' ' + (close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)') + ' | Session:' + sessionType + ' | Trend:' + (getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH') + ' | Pos:' + str.tostring(profHigh - profLow > 0 ? (close - profLow) / (profHigh - profLow) * 100 : 50, '#') + '%', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+    if valCrossUp or valCrossDown
+        alert(syminfo.ticker + ' (' + timeframe.period + ') VAL HIT ' + (close > vpVAL ? 'ABOVE' : 'BELOW') + ' | Price:' + str.tostring(close) + ' | VAL:' + str.tostring(vpVAL) + ' POC:' + str.tostring(vpPOC) + ' VAH:' + str.tostring(vpVAH) + ' ' + (close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)') + ' | Session:' + sessionType + ' | Trend:' + (getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH') + ' | Pos:' + str.tostring(profHigh - profLow > 0 ? (close - profLow) / (profHigh - profLow) * 100 : 50, '#') + '%', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+// Алерты Ордер Блоков с комплексными данными рынка
+if enableOBAlerts
+    if array.size(_bullBoxes) > 0
+        for i = 0 to array.size(_bullBoxes) - 1 by 1
+            if not na(array.get(_bullBoxes, i))
+                if close >= box.get_bottom(array.get(_bullBoxes, i)) and close <= box.get_top(array.get(_bullBoxes, i)) and close[1] < box.get_bottom(array.get(_bullBoxes, i))
+                    alert(syminfo.ticker + ' (' + timeframe.period + ') BULL ORDER BLOCK HIT | Price:' + str.tostring(close) + ' ' + (not na(vpVAL) and not na(vpVAH) ? close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)' : '') + ' | Session:' + sessionType + ' | Trend:' + (activeZone ? getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH' : 'NEUTRAL'), alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+                    break
+
+    if array.size(_bearBoxes) > 0
+        for i = 0 to array.size(_bearBoxes) - 1 by 1
+            if not na(array.get(_bearBoxes, i))
+                if close >= box.get_bottom(array.get(_bearBoxes, i)) and close <= box.get_top(array.get(_bearBoxes, i)) and close[1] > box.get_top(array.get(_bearBoxes, i))
+                    alert(syminfo.ticker + ' (' + timeframe.period + ') BEAR ORDER BLOCK HIT | Price:' + str.tostring(close) + ' ' + (not na(vpVAL) and not na(vpVAH) ? close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)' : '') + ' | Session:' + sessionType + ' | Trend:' + (activeZone ? getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH' : 'NEUTRAL'), alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+                    break
+
+// Алерт Фибоначчи с комплексными данными рынка
+if enableFibAlerts and activeZone and not na(fibPrice)
+    if fibCrossUp or fibCrossDown
+        alert(syminfo.ticker + ' (' + timeframe.period + ') FIB ' + str.tostring(customFibLevel * 100, '#.#') + '% HIT ' + (close > fibPrice ? 'ABOVE' : 'BELOW') + ' | Price:' + str.tostring(close) + ' Level:' + str.tostring(fibPrice) + ' ' + (not na(vpVAL) and not na(vpVAH) ? close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)' : '') + ' | Session:' + sessionType + ' | Trend:' + (getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH') + ' | Pos:' + str.tostring(profHigh - profLow > 0 ? (close - profLow) / (profHigh - profLow) * 100 : 50, '#') + '%', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+// Алерты LVN/HVN/NPOC
+if enableLvnHvnAlerts
+    if lvnEntryAlert
+        alert(syminfo.ticker + ' (' + timeframe.period + ') 🟢 LVN AREA ENTERED (Below VAL) | Price:' + str.tostring(close) + ' ' + (not na(vpVAL) and not na(vpVAH) ? close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)' : '') + ' | Session:' + sessionType + ' | Trend:' + (activeZone ? getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH' : 'NEUTRAL') + ' | 🚀 GO ZONE - Momentum opportunity', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+    if hvnEntryAlert
+        alert(syminfo.ticker + ' (' + timeframe.period + ') 🔴 HVN AREA ENTERED (Above VAH) | Price:' + str.tostring(close) + ' ' + (not na(vpVAL) and not na(vpVAH) ? close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)' : '') + ' | Session:' + sessionType + ' | Trend:' + (activeZone ? getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH' : 'NEUTRAL') + ' | 🛑 STOP ZONE - Heavy resistance', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+    if npocEntryAlert
+        alert(syminfo.ticker + ' (' + timeframe.period + ') ⚪ NPOC AREA ENTERED (Within VA) | Price:' + str.tostring(close) + ' ' + (not na(vpVAL) and not na(vpVAH) ? close > vpVAH ? '(ABOVE VA)' : close < vpVAL ? '(BELOW VA)' : '(IN VA)' : '') + ' | Session:' + sessionType + ' | Trend:' + (activeZone ? getTrendDirection(profHigh, profLow, zoneStart) ? 'BULLISH' : 'BEARISH' : 'NEUTRAL') + ' | 🎯 NAKED POC - Fill zone target', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+// Упрощенные сигнальные алерты
+if enableSignalAlerts
+    if buySignal
+        alert(syminfo.ticker + ' (' + timeframe.period + ') 🟢 BUY SIGNAL! | Setup: Large bearish rejection at support | Current Price:' + str.tostring(close) + ' | Reversal above ' + str.tostring(signalReversalThreshold, '#') + '% of setup candle', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+    if sellSignal
+        alert(syminfo.ticker + ' (' + timeframe.period + ') 🔴 SELL SIGNAL! | Setup: Large bullish rejection at resistance | Current Price:' + str.tostring(close) + ' | Reversal below ' + str.tostring(signalReversalThreshold, '#') + '% of setup candle', alertFrequency == 'Once Per Bar Close' ? alert.freq_once_per_bar_close : alert.freq_once_per_bar)
+
+//==========================
+// УСЛОВИЯ АЛЕРТОВ ДЛЯ TRADINGVIEW ALERTS
+//==========================
+
+// Булевы условия алертов с использованием функций пересечения, рассчитанных выше
+pocCrossedAlert = enableVPAlerts and not na(vpPOC) and (pocCrossUp or pocCrossDown)
+vahCrossedAlert = enableVPAlerts and not na(vpVAH) and (vahCrossUp or vahCrossDown)
+valCrossedAlert = enableVPAlerts and not na(vpVAL) and (valCrossUp or valCrossDown)
+anyVPLevelAlert = enableVPAlerts and (pocCrossedAlert or vahCrossedAlert or valCrossedAlert)
+customFibAlert = enableFibAlerts and not na(fibPrice) and (fibCrossUp or fibCrossDown)
+
+// Обнаружение алертов Ордер Блоков
+bullBlockHitAlert = false
+bearBlockHitAlert = false
+
+if enableOBAlerts
+    // Проверить бычьи ордер блоки на алерты
+    if array.size(_bullBoxes) > 0
+        for i = 0 to array.size(_bullBoxes) - 1 by 1
+            if not na(array.get(_bullBoxes, i))
+                bullBox = array.get(_bullBoxes, i)
+                boxTop = box.get_top(bullBox)
+                boxBottom = box.get_bottom(bullBox)
+
+                // Проверить, вошла ли цена только что снизу
+                priceInBox = close >= boxBottom and close <= boxTop
+                priceWasBelow = close[1] < boxBottom
+
+                if priceInBox and priceWasBelow
+                    bullBlockHitAlert := true
+                    break
+
+    // Проверить медвежьи ордер блоки на алерты
+    if array.size(_bearBoxes) > 0
+        for i = 0 to array.size(_bearBoxes) - 1 by 1
+            if not na(array.get(_bearBoxes, i))
+                bearBox = array.get(_bearBoxes, i)
+                boxTop = box.get_top(bearBox)
+                boxBottom = box.get_bottom(bearBox)
+
+                // Проверить, вошла ли цена только что сверху
+                priceInBox = close >= boxBottom and close <= boxTop
+                priceWasAbove = close[1] > boxTop
+
+                if priceInBox and priceWasAbove
+                    bearBlockHitAlert := true
+                    break
+
+// Финальные условия алертов
+bullBlockAlert = bullBlockHitAlert
+bearBlockAlert = bearBlockHitAlert
+anyOrderBlockAlert = bullBlockHitAlert or bearBlockHitAlert
+// Регистрация условий алертов для создания алертов в TradingView
+alertcondition(pocCrossedAlert, title = '🎯 POC Level Hit', message = 'POC Level Hit! Price crossed Point of Control')
+alertcondition(vahCrossedAlert, title = '🔴 VAH Level Hit', message = 'VAH Level Hit! Price crossed Value Area High')
+alertcondition(valCrossedAlert, title = '🟢 VAL Level Hit', message = 'VAL Level Hit! Price crossed Value Area Low')
+alertcondition(anyVPLevelAlert, title = '📊 Any VP Level Hit', message = 'Volume Profile Level Hit! Price crossed POC, VAH, or VAL')
+alertcondition(customFibAlert, title = '📐 Custom Fib Level Hit', message = 'Custom Fibonacci Level Hit! Price crossed user-defined fib level')
+alertcondition(bullBlockAlert, title = '🟢 Bull Order Block Hit', message = 'Bull Order Block Hit! Price entered bullish order block zone')
+alertcondition(bearBlockAlert, title = '🔴 Bear Order Block Hit', message = 'Bear Order Block Hit! Price entered bearish order block zone')
+alertcondition(anyOrderBlockAlert, title = '📦 Any Order Block Hit', message = 'Order Block Hit! Price entered bull or bear order block zone')
+alertcondition(lvnEntryAlert, title = '🟢 LVN GO Zone Entered', message = 'LVN GO Zone Entered! Price entered Low Volume momentum area')
+alertcondition(hvnEntryAlert, title = '🔴 HVN STOP Zone Entered', message = 'HVN STOP Zone Entered! Price entered High Volume resistance area')
+alertcondition(npocEntryAlert, title = '⚪ NPOC Fill Zone Entered', message = 'NPOC Fill Zone Entered! Price entered Naked POC area')
+alertcondition(lvnEntryAlert or hvnEntryAlert or npocEntryAlert, title = '📈 Any Volume Node Zone', message = 'Volume Node Zone! Price entered GO, STOP, or FILL zone')
+alertcondition(buySignal, title = '🟢 BUY Signal', message = 'BUY Signal! Large candle rejected at key support level')
+alertcondition(sellSignal, title = '🔴 SELL Signal', message = 'SELL Signal! Large candle rejected at key resistance level')
+alertcondition(buySignalAtLevel or sellSignalAtLevel, title = '⚡ Any Buy/Sell Signal', message = 'Trading Signal! Price rejected at key level')
+//==========================
+// ВИЗУАЛЬНЫЕ СИГНАЛЫ НА ПЕРЕДНЕМ ПЛАНЕ (ДОЛЖНЫ БЫТЬ В КОНЦЕ)
+//==========================
+// Визуальные сигналы на графике - Чистые зеленые/красные треугольники - ПЕРЕМЕЩЕНЫ В КОНЕЦ ДЛЯ ПЕРЕДНЕГО ПЛАНА
+plotshape(buySignal, title = 'BUY Signal', location = location.belowbar, style = shape.triangleup, size = size.small, color = #00FF00, text = '')
+plotshape(sellSignal, title = 'SELL Signal', location = location.abovebar, style = shape.triangledown, size = size.small, color = #FF0000, text = '')
+// Отображение предупреждения на графике (упрощенное)
+var bool disclaimerCreated = false
+if barstate.islast == true and disclaimerCreated == false and showDisclaimer == true
+    var table disclaimer = table.new(position.bottom_left, 1, 6, bgcolor = color.black, border_width = 3, border_color = color.yellow)
+    table.cell(disclaimer, 0, 0, '⚠️ ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ ⚠️', text_color = color.yellow, text_size = size.normal, bgcolor = color.black)
+    table.cell(disclaimer, 0, 1, 'Месячные/Квартальные сессии могут работать некорректно\nна младших таймфреймах (ниже 1H)\nУменьшите \'Макс. баров для анализа\' если расчет прерывается', text_color = color.white, text_size = size.small, bgcolor = color.black)
+    table.cell(disclaimer, 0, 2, '⚡ ПРОИЗВОДИТЕЛЬНОСТЬ: Уменьшите Разрешение & Макс. бары для скорости\nОтключите Complex LVN/HVN при необходимости', text_color = color.orange, text_size = size.small, bgcolor = color.black)
+    table.cell(disclaimer, 0, 3, 'Для лучших результатов с длинными сессиями,\nиспользуйте старшие таймфреймы (4H, Daily+)', text_color = color.orange, text_size = size.small, bgcolor = color.black)
+    table.cell(disclaimer, 0, 4, '🔄 МЕТОДЫ РАСЧЕТА СЕССИЙ:\n\'Include Previous Session\' (ПО УМОЛЧАНИЮ): Использует более умный расчет границ для предотвращения скопления\n\'Start Fresh\': Оригинальный метод расчета границ\nОба метода используют одинаковую отрисовку Volume Profile', text_color = color.rgb(0, 255, 255), text_size = size.small, bgcolor = color.black)
+    table.cell(disclaimer, 0, 5, '📊 ПРОЦЕНТЫ БЫКОВ/МЕДВЕДЕЙ: Показывает давление покупок/продаж на каждом ценовом уровне\n🔴 Высокий % медведей (70%+): Сильное давление продаж при подходе снизу = вероятен отскок\n🟢 Высокий % быков (70%+): Сильное давление покупок при подходе сверху = вероятна поддержка\n⚖️ Сбалансировано (50/50): Нейтральные зоны с меньшим направленным смещением\n💡 HVN/LVN: Красные зоны = сопротивление выше VAH, Зеленые зоны = импульс ниже VAL\n📈 Mode 1: Отображение рядом | Mode 2: Наложенное отображение (экономия места)', text_color = color.rgb(255, 255, 0), text_size = size.small, bgcolor = color.black)
+    disclaimerCreated := true
+    disclaimerCreated
+
+//=======================
+// ДОЛЖН БЫТЬ В КОНЦЕ )))
+//=======================

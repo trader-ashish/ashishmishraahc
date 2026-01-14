@@ -1,0 +1,287 @@
+//@version=5
+indicator("Auto S/R with Breakouts & Trendlines v1.15", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ====== INPUTS ======
+left            = input.int(5, "Pivot Left Bars", minval=1)
+right           = input.int(5, "Pivot Right Bars", minval=1)
+atrLen          = input.int(14, "ATR Length")
+atrMult         = input.float(1.5, "Zone Buffer (ATR x)", step=0.1)
+mergeFactor     = input.float(1.0, "Merge sensitivity (ATR x)", step=0.1)
+zoneSizePct     = input.float(0.001, "Zone size % (for buffer)", step=0.0001)
+maxZonesToPlot  = input.int(15, "Max Zones to Plot", minval=1)
+zoneMaxBars     = input.int(300, "Max zone age (bars)")
+minTouches      = input.int(1, "Min touches to consider zone", minval=1)
+
+useEMAFilter    = input.bool(true, "Use EMA Trend Filter")
+emaLen          = input.int(200, "EMA Length")
+useVolumeConfirm= input.bool(false, "Use Volume Confirmation")
+volLen          = input.int(20, "Volume Avg Length")
+volMult         = input.float(1.2, "Volume multiplier (x avg)")
+
+showZones       = input.bool(true, "Show Zones")
+showLabels      = input.bool(true, "Show Zone Labels")
+showDirectionBox= input.bool(true, "Show Buy/Sell Box")
+alertsEnabled   = input.bool(true, "Enable Alerts")
+
+// ====== HELPERS ======
+atr = ta.atr(atrLen)
+trendEMA = ta.ema(close, emaLen)
+trendBull = close > trendEMA
+trendBear = close < trendEMA
+volAvg = ta.sma(volume, volLen)
+volConfirm = useVolumeConfirm ? (volume > volAvg * volMult) : true
+
+plot(trendEMA, title="Trend EMA", linewidth=2, color=color.rgb(62, 240, 8))
+
+// ====== PIVOTS ======
+ph = ta.pivothigh(high, left, right)
+pl = ta.pivotlow(low, left, right)
+
+// ====== ZONE STORAGE ======
+var float[] zoneTopArr = array.new_float()
+var float[] zoneBotArr = array.new_float()
+var int[]   zoneTouches = array.new_int()
+var int[]   zoneCreatedBar = array.new_int()
+var bool[]  zoneIsResistance = array.new_bool()
+var line[]  zoneTopLines = array.new_line()
+var line[]  zoneBotLines = array.new_line()
+var label[] zoneLabels = array.new_label()
+
+// ====== FUNCTION: Add or Merge Zone (SAFE) ======
+f_add_zone(_top, _bot, _isRes) =>
+    int idxFound = na
+    sz = array.size(zoneTopArr)
+    // only iterate if array has elements (guard against array.get on empty)
+    if sz > 0
+        for i = 0 to sz - 1
+            ot = array.get(zoneTopArr, i)
+            ob = array.get(zoneBotArr, i)
+            overlap = not (_bot > ot or _top < ob)
+            midOld = (ot + ob) / 2.0
+            midNew = (_top + _bot) / 2.0
+            near = math.abs(midOld - midNew) <= atr * mergeFactor
+            if overlap or near
+                idxFound := i
+                break
+    if na(idxFound)
+        col = _isRes ? color.red : color.green
+        topLine = line.new(bar_index, _top, bar_index + 1, _top, xloc=xloc.bar_index, extend=extend.right, color=col, width=1)
+        botLine = line.new(bar_index, _bot, bar_index + 1, _bot, xloc=xloc.bar_index, extend=extend.right, color=col, width=1)
+        lbl = label.new(bar_index, (_top + _bot) / 2.0, text=_isRes ? "Supply" : "Demand", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, color=color.new(col, 80), textcolor=color.white)
+        array.unshift(zoneTopArr, _top)
+        array.unshift(zoneBotArr, _bot)
+        array.unshift(zoneTouches, 1)
+        array.unshift(zoneCreatedBar, bar_index)
+        array.unshift(zoneIsResistance, _isRes)
+        array.unshift(zoneTopLines, topLine)
+        array.unshift(zoneBotLines, botLine)
+        array.unshift(zoneLabels, lbl)
+    else
+        ot = array.get(zoneTopArr, idxFound)
+        ob = array.get(zoneBotArr, idxFound)
+        newTop = math.max(ot, _top)
+        newBot = math.min(ob, _bot)
+        array.set(zoneTopArr, idxFound, newTop)
+        array.set(zoneBotArr, idxFound, newBot)
+        array.set(zoneTouches, idxFound, array.get(zoneTouches, idxFound) + 1)
+        if array.size(zoneTopLines) > idxFound
+            oldTopLine = array.get(zoneTopLines, idxFound)
+            oldBotLine = array.get(zoneBotLines, idxFound)
+            oldLbl = array.get(zoneLabels, idxFound)
+            if not na(oldTopLine)
+                line.delete(oldTopLine)
+            if not na(oldBotLine)
+                line.delete(oldBotLine)
+            if not na(oldLbl)
+                label.delete(oldLbl)
+        col = array.get(zoneIsResistance, idxFound) ? color.red : color.green
+        newTopLine = line.new(bar_index, newTop, bar_index + 1, newTop, xloc=xloc.bar_index, extend=extend.right, color=col, width=1)
+        newBotLine = line.new(bar_index, newBot, bar_index + 1, newBot, xloc=xloc.bar_index, extend=extend.right, color=col, width=1)
+        newLbl = label.new(bar_index, (newTop + newBot) / 2.0, text=array.get(zoneIsResistance, idxFound) ? "Supply" : "Demand", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, color=color.new(col, 80), textcolor=color.white)
+        array.set(zoneTopLines, idxFound, newTopLine)
+        array.set(zoneBotLines, idxFound, newBotLine)
+        array.set(zoneLabels, idxFound, newLbl)
+
+// ====== CREATE ZONES FROM PIVOTS ======
+if not na(ph)
+    top = ph * (1 + zoneSizePct)
+    bot = ph
+    f_add_zone(top, bot, true)
+if not na(pl)
+    top = pl
+    bot = pl * (1 - zoneSizePct)
+    f_add_zone(top, bot, false)
+
+// ====== EXPIRE OLD ZONES ======
+szAll = array.size(zoneTopArr)
+if szAll > 0
+    for idx = 0 to szAll - 1
+        i = szAll - 1 - idx
+        created = array.get(zoneCreatedBar, i)
+        if bar_index - created > zoneMaxBars
+            if array.size(zoneTopLines) > i
+                l1 = array.get(zoneTopLines, i)
+                if not na(l1)
+                    line.delete(l1)
+                array.remove(zoneTopLines, i)
+            if array.size(zoneBotLines) > i
+                l2 = array.get(zoneBotLines, i)
+                if not na(l2)
+                    line.delete(l2)
+                array.remove(zoneBotLines, i)
+            if array.size(zoneLabels) > i
+                lb = array.get(zoneLabels, i)
+                if not na(lb)
+                    label.delete(lb)
+                array.remove(zoneLabels, i)
+            array.remove(zoneTopArr, i)
+            array.remove(zoneBotArr, i)
+            array.remove(zoneTouches, i)
+            array.remove(zoneCreatedBar, i)
+            array.remove(zoneIsResistance, i)
+
+// ====== REDRAW ZONES ======
+zoneCount = array.size(zoneTopArr)
+if zoneCount > 0 and showZones
+    for i = 0 to math.min(zoneCount, maxZonesToPlot) - 1
+        zTop = array.get(zoneTopArr, i)
+        zBot = array.get(zoneBotArr, i)
+        isRes = array.get(zoneIsResistance, i)
+        col = isRes ? color.red : color.green
+        if array.size(zoneTopLines) > i
+            oldT = array.get(zoneTopLines, i)
+            oldB = array.get(zoneBotLines, i)
+            oldL = array.get(zoneLabels, i)
+            if not na(oldT)
+                line.delete(oldT)
+            if not na(oldB)
+                line.delete(oldB)
+            if not na(oldL)
+                label.delete(oldL)
+        tl = line.new(bar_index - zoneMaxBars, zTop, bar_index, zTop, xloc=xloc.bar_index, extend=extend.right, color=col, width=1)
+        bl = line.new(bar_index - zoneMaxBars, zBot, bar_index, zBot, xloc=xloc.bar_index, extend=extend.right, color=col, width=1)
+        lbl = label.new(bar_index, (zTop + zBot) / 2.0, text=isRes ? "Supply" : "Demand", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, color=color.new(col, 80), textcolor=color.white)
+        array.set(zoneTopLines, i, tl)
+        array.set(zoneBotLines, i, bl)
+        array.set(zoneLabels, i, lbl)
+
+// ====== BEST ZONE ======
+bestIdx = -1
+bestScore = -1.0
+if zoneCount > 0
+    for i = 0 to zoneCount - 1
+        touches = array.get(zoneTouches, i)
+        if touches < minTouches
+            continue
+        zTop = array.get(zoneTopArr, i)
+        zBot = array.get(zoneBotArr, i)
+        dist = math.min(math.abs(close - zTop), math.abs(close - zBot))
+        distScore = 1.0 / (1.0 + dist / math.max(atr, 1e-10))
+        score = touches + distScore
+        if score > bestScore
+            bestScore := score
+            bestIdx := i
+
+// ====== SIGNALS ======
+var string latestSignal = "No Signal"
+var string zoneStrength = "Neutral"
+var bool buySignal = false
+var bool sellSignal = false
+if bestIdx != -1
+    zTop = array.get(zoneTopArr, bestIdx)
+    zBot = array.get(zoneBotArr, bestIdx)
+    touches = array.get(zoneTouches, bestIdx)
+    isRes = array.get(zoneIsResistance, bestIdx)
+    strengthScore = touches
+    if useEMAFilter
+        if isRes and trendBear
+            strengthScore += 1
+        if (not isRes) and trendBull
+            strengthScore += 1
+    zoneStrength := strengthScore >= 4 ? (isRes ? "Strong Sell" : "Strong Buy") : strengthScore == 3 ? (isRes ? "Weak Sell" : "Weak Buy") : "Neutral"
+    buySignal := (close > zTop and close[1] <= zTop) and (not useEMAFilter or trendBull) and volConfirm
+    sellSignal := (close < zBot and close[1] >= zBot) and (not useEMAFilter or trendBear) and volConfirm
+    if buySignal
+        latestSignal := zoneStrength == "Strong Buy" ? "STRONG BUY" : "BUY"
+    if sellSignal
+        latestSignal := zoneStrength == "Strong Sell" ? "STRONG SELL" : "SELL"
+    if array.size(zoneLabels) > bestIdx
+        lab = array.get(zoneLabels, bestIdx)
+        if not na(lab)
+            label.set_text(lab, (isRes ? "Resistance\\nTouches: " : "Support\\nTouches: ") + str.tostring(touches))
+
+// ====== DIRECTION BOX ======
+var label dirLabel = na
+if showDirectionBox and barstate.islast
+    boxText = "Signal: " + latestSignal + "\\nZoneStr: " + zoneStrength
+    boxCol = latestSignal == "STRONG BUY" ? color.new(color.green, 0) : latestSignal == "BUY" ? color.new(color.green, 40) : latestSignal == "STRONG SELL" ? color.new(color.red, 0) : latestSignal == "SELL" ? color.new(color.red, 40) : color.new(color.gray, 80)
+    if not na(dirLabel)
+        label.delete(dirLabel)
+    dirLabel := label.new(bar_index, high, boxText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, color=boxCol, textcolor=color.white)
+    label.set_xy(dirLabel, bar_index + 1, high)
+
+// ====== ALERTS ======
+if alertsEnabled and bestIdx != -1
+    if buySignal
+        alert("Buy breakout detected on zone (" + zoneStrength + ")", alert.freq_once_per_bar_close)
+    if sellSignal
+        alert("Sell breakout detected on zone (" + zoneStrength + ")", alert.freq_once_per_bar_close)
+
+// ====== TRENDLINES ======
+var line upTrend = na
+var line downTrend = na
+
+if not na(pl)
+    var int[] pivotLowsBar = array.new_int()
+    var float[] pivotLowsPrice = array.new_float()
+    array.unshift(pivotLowsBar, bar_index - right)
+    array.unshift(pivotLowsPrice, pl)
+    if array.size(pivotLowsBar) > 2
+        array.pop(pivotLowsBar)
+        array.pop(pivotLowsPrice)
+    if array.size(pivotLowsBar) == 2
+        b1 = array.get(pivotLowsBar, 1)
+        p1 = array.get(pivotLowsPrice, 1)
+        b2 = array.get(pivotLowsBar, 0)
+        p2 = array.get(pivotLowsPrice, 0)
+        if not na(upTrend)
+            line.delete(upTrend)
+        upTrend := line.new(b1, p1, b2, p2, xloc=xloc.bar_index, extend=extend.right, color=color.green, width=2)
+
+if not na(ph)
+    var int[] pivotHighsBar = array.new_int()
+    var float[] pivotHighsPrice = array.new_float()
+    array.unshift(pivotHighsBar, bar_index - right)
+    array.unshift(pivotHighsPrice, ph)
+    if array.size(pivotHighsBar) > 2
+        array.pop(pivotHighsBar)
+        array.pop(pivotHighsPrice)
+    if array.size(pivotHighsBar) == 2
+        b1 = array.get(pivotHighsBar, 1)
+        p1 = array.get(pivotHighsPrice, 1)
+        b2 = array.get(pivotHighsBar, 0)
+        p2 = array.get(pivotHighsPrice, 0)
+        if not na(downTrend)
+            line.delete(downTrend)
+        downTrend := line.new(b1, p1, b2, p2, xloc=xloc.bar_index, extend=extend.right, color=color.red, width=2)
+
+// ====== CURRENT SUPPORT & RESISTANCE LINES ======
+var line currSupport = na
+var line currResistance = na
+if not na(pl)
+    if not na(currSupport)
+        line.delete(currSupport)
+    currSupport := line.new(bar_index - right, pl, bar_index, pl, xloc=xloc.bar_index, extend=extend.right, color=color.green, width=2, style=line.style_dashed)
+if not na(ph)
+    if not na(currResistance)
+        line.delete(currResistance)
+    currResistance := line.new(bar_index - right, ph, bar_index, ph, xloc=xloc.bar_index, extend=extend.right, color=color.red, width=2, style=line.style_dashed)
+
+// ====== INFO TABLE ======
+var table info = table.new(position.bottom_right, 1, 3)
+if barstate.islast
+    table.cell(info, 0, 0, "Zones tracked: " + str.tostring(array.size(zoneTopArr)))
+    table.cell(info, 0, 1, "Best Zone Touches: " + (bestIdx == -1 ? "NA" : str.tostring(array.get(zoneTouches, bestIdx))))
+    table.cell(info, 0, 2, "Zone Strength: " + zoneStrength)
+
+// End of script

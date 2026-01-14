@@ -1,0 +1,27 @@
+//@version=5
+indicator("RSI Colored Indicator with Borders", overlay=false)
+
+// Inputs
+rsiLength = input.int(14, "RSI Length")
+overbought = input.int(70, "Overbought Level")
+oversold = input.int(30, "Oversold Level")
+
+// RSI calculation
+rsiValue = ta.rsi(close, rsiLength)
+
+// Color coding for RSI line
+rsiColor = rsiValue > overbought ? color.red : rsiValue < oversold ? color.green : color.blue
+
+// Plot RSI line
+plot(rsiValue, color=rsiColor, title="RSI", linewidth=2)
+
+// Horizontal borders/lines
+h1 = hline(overbought, "Overbought", color=color.red, linestyle=hline.style_solid, linewidth=2)
+h2 = hline(oversold, "Oversold", color=color.green, linestyle=hline.style_solid, linewidth=2)
+
+// Background color for zones
+bgcolor(rsiValue > overbought ? color.new(color.red, 85) : rsiValue < oversold ? color.new(color.green, 85) : na)
+
+// Alerts
+alertcondition(rsiValue > overbought, title="RSI Overbought", message="RSI crossed above overbought")
+alertcondition(rsiValue < oversold, title="RSI Oversold", message="RSI crossed below oversold")

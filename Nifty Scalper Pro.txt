@@ -1,0 +1,252 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//MAA SHARDA TRADING
+//@version=5
+indicator('Maa Sharda Trading-Supertrend (Buy/Sell) With TP & SL', overlay = true)
+
+// --- Input Parameters ---
+atrPeriod = input.int(10, title = 'ATR Period', group = 'Super Trend')
+factor = input.float(05, title = 'Factor', step = 0.1, group = 'Super Trend')
+atrLength = input.int(14, minval = 1, title = 'ATR Length', group = 'Super Trend')
+profitFactor = input.float(3, title = 'Take Profit Factor', group = 'TP&SL')
+stopFactor = input.float(2.5, title = 'Stop Loss Factor', group = 'TP&SL')
+stopLossType = input.string('Fixed', options = ['Fixed', 'Trailing'], title = 'Stop Loss Type', group = 'TP&SL')
+lineStyle = input.string('Solid', options = ['Solid', 'Dashed', 'Dotted'], title = 'Line Style', group = 'TP&SL')
+lineWidth = input.int(1, minval = 1, title = 'Line Width', group = 'TP&SL')
+
+// خيارات تفعيل وتعطيل الخطوط من الإعدادات
+showTP1 = input.bool(true, title="Show TP1 Line", group="TP&SL")
+showTP2 = input.bool(true, title="Show TP2 Line", group="TP&SL")
+showTP3 = input.bool(true, title="Show TP3 Line", group="TP&SL")
+showSL  = input.bool(true, title="Show Stop Loss Line", group="TP&SL")
+showVWAP = input.bool(true, title="Show VWAP", group="VWAP")
+showFib = input.bool(true, title="Show Fibonacci Retracement(Golden zone)", group="Fibonacci")
+
+// شفافية الملصقات
+labelTransp = input.int(100, title="Label Transparency (0=Opaque, 100=Invisible)", minval=0, maxval=100, group="TP&SL")
+
+// خيار تحديد مكان النص بجانب خطوط الأهداف ووقف الخسارة
+labelPos = input.string("Right", title="Label Position", options=["Right", "Left", "Above", "Below"], group="TP&SL")
+labelStyle = labelPos == "Right"  ? label.style_label_right  :
+             labelPos == "Left"   ? label.style_label_left   :
+             labelPos == "Above"  ? label.style_label_up     :
+             label.style_label_down
+
+// خيارات نسب الفيبوناتشي ولون الخطين من الإعدادات
+fibLevel1 = input.float(0.618, title="Fibonacci Level 1", minval=0, maxval=1, step=0.001, group="Fibonacci")
+fibLevel2 = input.float(0.50, title="Fibonacci Level 2", minval=0, maxval=1, step=0.001, group="Fibonacci")
+fibColor1 = input.color(color.blue, title="Fibonacci Line 1 Color", group="Fibonacci")
+fibColor2 = input.color(color.blue, title="Fibonacci Line 2 Color", group="Fibonacci")
+
+// --- Calculations ---
+atr = ta.atr(atrPeriod)
+up = hl2 - factor * atr
+dn = hl2 + factor * atr
+
+// Initialize trendUp and trendDown
+var float trendUp = na
+var float trendDown = na
+var bufferPercentage = 0.01
+trendUp := na(trendUp[1]) ? up : close[1] > trendUp[1] ? math.max(up, trendUp[1]) : up
+trendDown := na(trendDown[1]) ? dn : close[1] < trendDown[1] ? math.min(dn, trendDown[1]) : dn
+
+var int trend = na
+trend := na(trend[1]) ? 1 : close > trendDown[1] ? 1 : close < trendUp[1] ? -1 : trend[1]
+supertrend = trend == 1 ? trendUp : trendDown
+
+// Buffer Zone Calculation
+bufferSize = supertrend * bufferPercentage / 100
+upperBuffer = supertrend + bufferSize
+lowerBuffer = supertrend - bufferSize
+
+// Modified Buy/Sell Signals
+buySignal = close > upperBuffer and trend[1] == -1
+sellSignal = close < lowerBuffer and trend[1] == 1
+
+atrValue = ta.atr(atrLength)
+takeProfit1 = trend == 1 ? close + profitFactor * atrValue : close - profitFactor * atrValue
+takeProfit2 = trend == 1 ? close + 2 * profitFactor * atrValue : close - 2 * profitFactor * atrValue
+takeProfit3 = trend == 1 ? close + 3 * profitFactor * atrValue : close - 3 * profitFactor * atrValue
+
+// --- Stop Loss Calculation (Fixed or Trailing) ---
+var float stopLoss = na
+if stopLossType == 'Fixed'
+    stopLoss := trend == 1 ? close - stopFactor * atrValue : close + stopFactor * atrValue
+else if stopLossType == 'Trailing' and trend == 1
+    stopLoss := na(stopLoss[1]) ? close - stopFactor * atrValue : math.max(stopLoss[1], close - stopFactor * atrValue)
+else if stopLossType == 'Trailing' and trend == -1
+    stopLoss := na(stopLoss[1]) ? close + stopFactor * atrValue : math.min(stopLoss[1], close + stopFactor * atrValue)
+
+// --- Plotting ---
+
+// Supertrend Line
+plot(supertrend, 'Supertrend', color = trend == 1 ? color.green : color.red, linewidth = 2)
+// Plot Buffer Zone
+plot(upperBuffer, 'Upper Buffer', color = trend == 1 ? color.new(color.green, 80) : color.new(color.red, 80))
+plot(lowerBuffer, 'Lower Buffer', color = trend == 1 ? color.new(color.green, 80) : color.new(color.red, 80))
+// Entry Lines
+var line entryLine = na
+if buySignal
+    line.delete(entryLine)
+    entryLine := line.new(bar_index, close, bar_index + 1, close, color = color.gray, style = line.style_solid, extend = extend.right, width = 1)
+else if sellSignal
+    line.delete(entryLine)
+    entryLine := line.new(bar_index, close, bar_index + 1, close, color = color.gray, style = line.style_solid, extend = extend.right, width = 1)
+
+// Take Profit and Stop Loss Lines
+var line tp1Line = na
+var line tp2Line = na
+var line tp3Line = na
+var line slLine = na
+
+lineStyleSelected = lineStyle == 'Solid' ? line.style_solid : lineStyle == 'Dashed' ? line.style_dashed : line.style_dotted
+
+if buySignal or sellSignal
+    line.delete(tp1Line)
+    line.delete(tp2Line)
+    line.delete(tp3Line)
+    line.delete(slLine)
+
+    tp1Line := showTP1 ? line.new(bar_index, takeProfit1, bar_index + 1, takeProfit1, color = color.green, style = lineStyleSelected, width = lineWidth, extend = extend.right) : na
+    tp2Line := showTP2 ? line.new(bar_index, takeProfit2, bar_index + 1, takeProfit2, color = color.green, style = lineStyleSelected, width = lineWidth, extend = extend.right) : na
+    tp3Line := showTP3 ? line.new(bar_index, takeProfit3, bar_index + 1, takeProfit3, color = color.green, style = lineStyleSelected, width = lineWidth, extend = extend.right) : na
+    slLine  := showSL  ? line.new(bar_index, stopLoss,   bar_index + 1, stopLoss,   color = color.red,   style = lineStyleSelected, width = lineWidth, extend = extend.right) : na
+
+// --- Show labels beside TP/SL lines once per signal (بدون السعر) ---
+var label tp1Label = na
+var label tp2Label = na
+var label tp3Label = na
+var label slLabel  = na
+
+if buySignal or sellSignal
+    if not na(tp1Label)
+        label.delete(tp1Label)
+    if not na(tp2Label)
+        label.delete(tp2Label)
+    if not na(tp3Label)
+        label.delete(tp3Label)
+    if not na(slLabel)
+        label.delete(slLabel)
+    tp1Label := showTP1 ? label.new(bar_index + 5, takeProfit1, "TP1", color=color.new(color.green, labelTransp), style=labelStyle, textcolor=color.white) : na
+    tp2Label := showTP2 ? label.new(bar_index + 5, takeProfit2, "TP2", color=color.new(color.green, labelTransp), style=labelStyle, textcolor=color.white) : na
+    tp3Label := showTP3 ? label.new(bar_index + 5, takeProfit3, "TP3", color=color.new(color.green, labelTransp), style=labelStyle, textcolor=color.white) : na
+    slLabel  := showSL  ? label.new(bar_index + 5, stopLoss,   "SL",  color=color.new(color.red, labelTransp), style=labelStyle, textcolor=color.white) : na
+
+// Buy/Sell Signals (Optional, for visual clarity)
+plotshape(buySignal, 'Buy', shape.triangleup, location.belowbar, color.green, size = size.small)
+plotshape(sellSignal, 'Sell', shape.triangledown, location.abovebar, color.red, size = size.small)
+
+/// Table Position
+tablePosition = input.string('Bottom Right', title = 'Table Position', options = ['Top Right', 'Top Left', 'Bottom Right', 'Bottom Left'], group = 'TP&SL')
+
+/// --- Table Creation ---
+var table targetsTable = table.new(tablePosition == 'Top Right' ? position.top_right : tablePosition == 'Top Left' ? position.top_left : tablePosition == 'Bottom Left' ? position.bottom_left : position.bottom_right, 5, 2, color.new(color.gray, 80))
+
+// Table Headers
+if bar_index == 0
+    table.cell(targetsTable, 0, 0, 'Level', text_color = color.white, text_size = size.small)
+    table.cell(targetsTable, 0, 1, 'Price', text_color = color.white, text_size = size.small)
+
+// Table Rows (only update on new signal)
+if buySignal or sellSignal
+    table.cell(targetsTable, 1, 0, 'Stop Loss', text_color = color.red, text_size = size.small)
+    table.cell(targetsTable, 1, 1, str.tostring(stopLoss, format.price), text_color = color.red, text_size = size.small)
+
+    table.cell(targetsTable, 2, 0, 'Take Profit 1', text_color = color.green, text_size = size.small)
+    table.cell(targetsTable, 2, 1, str.tostring(takeProfit1, format.price), text_color = color.green, text_size = size.small)
+
+    table.cell(targetsTable, 3, 0, 'Take Profit 2', text_color = color.green, text_size = size.small)
+    table.cell(targetsTable, 3, 1, str.tostring(takeProfit2, format.price), text_color = color.green, text_size = size.small)
+
+    table.cell(targetsTable, 4, 0, 'Take Profit 3', text_color = color.green, text_size = size.small)
+    table.cell(targetsTable, 4, 1, str.tostring(takeProfit3, format.price), text_color = color.green, text_size = size.small)
+
+/// --- EMA and Table ---
+ema_100 = ta.ema(close, 100)
+signal = close > ema_100 ? 'Bullish' : close < ema_100 ? 'Bearish' : 'Neutral'
+
+var table infoTable = table.new(position.bottom_right, 1, 2, color.new(color.gray, 80))
+if bar_index == 0
+    table.cell(infoTable, 0, 0, '100 EMA Signal:', text_color = color.white, text_size = size.small)
+
+signalColor = close > ema_100 ? color.new(color.green, 0) : close < ema_100 ? color.new(color.red, 0) : color.gray
+table.cell(infoTable, 0, 1, signal, text_color = signalColor, text_size = size.small)
+
+///
+// 1. Calculate VWAP
+// Calculate VWAP
+vwap_value = ta.vwap(hlc3)
+
+// Persistent Line Variable
+var line vwap_line = na
+var label vwapLabel = na
+
+// Manage VWAP Line
+if showVWAP
+    if not na(vwap_line)
+        line.delete(vwap_line)
+    if not na(vwapLabel)
+        label.delete(vwapLabel)
+    vwap_line := line.new(bar_index, vwap_value, bar_index + 10, vwap_value, extend = extend.right, color = color.yellow, width = 1)
+    vwapLabel := label.new(bar_index + 10, vwap_value, "VWAP", color=color.new(color.yellow, labelTransp), style=labelStyle, textcolor=color.rgb(254, 254, 255), size=size.normal)
+else
+    if not na(vwap_line)
+        line.delete(vwap_line)
+        vwap_line := na
+    if not na(vwapLabel)
+        label.delete(vwapLabel)
+        vwapLabel := na
+
+// Fetch Heikin Ashi data using a dedicated ticker
+haTicker = ticker.heikinashi(syminfo.tickerid)
+haOpen = request.security(haTicker, timeframe.period, open)
+haClose = request.security(haTicker, timeframe.period, close)
+
+// Determine candle color based on open/close relationship
+isBullish = haClose > haOpen
+isBearish = haClose < haOpen
+
+// Define RGB colors for bullish and bearish candles
+bullishColor = color.rgb(0, 128, 0) // Green
+bearishColor = color.rgb(255, 0, 0) // Red
+
+// Apply the colors to the candles
+barcolor(isBullish ? bullishColor : isBearish ? bearishColor : na)
+
+// --- Fibonacci Retracement Toggle ---
+lookbackPeriod = input.int(50, title="Lookback Period", group="Fibonacci")
+recentHigh = ta.highest(high, lookbackPeriod)
+recentLow = ta.lowest(low, lookbackPeriod)
+
+// --- Fibonacci Levels Calculation ---
+fib_1 = recentHigh - (recentHigh - recentLow) * fibLevel1
+fib_2 = recentHigh - (recentHigh - recentLow) * fibLevel2
+
+// --- Persistent Line & Label Variables ---
+var line fibLine1 = na
+var line fibLine2 = na
+var label fibLabel1 = na
+var label fibLabel2 = na
+
+// --- Remove Previous Lines & Labels Before Creating New Ones ---
+if showFib
+    if not na(fibLine1)
+        line.delete(fibLine1)
+    if not na(fibLine2)
+        line.delete(fibLine2)
+    if not na(fibLabel1)
+        label.delete(fibLabel1)
+    if not na(fibLabel2)
+        label.delete(fibLabel2)
+    fibLine1 := line.new(bar_index, fib_1, bar_index + 10, fib_1, color=fibColor1, width=2, extend=extend.right)
+    fibLine2 := line.new(bar_index, fib_2, bar_index + 10, fib_2, color=fibColor2, width=2, extend=extend.right)
+    fibLabel1 := label.new(bar_index + 10, fib_1, str.tostring(fibLevel1 * 100, "#.##") + "%", color=color.new(fibColor1, labelTransp), style=labelStyle, textcolor=color.white)
+    fibLabel2 := label.new(bar_index + 10, fib_2, str.tostring(fibLevel2 * 100, "#.##") + "%", color=color.new(fibColor2, labelTransp), style=labelStyle, textcolor=color.white)
+else
+    if not na(fibLine1)
+        line.delete(fibLine1)
+    if not na(fibLine2)
+        line.delete(fibLine2)
+    if not na(fibLabel1)
+        label.delete(fibLabel1)
+    if not na(fibLabel2)
+        label.delete(fibLabel2)

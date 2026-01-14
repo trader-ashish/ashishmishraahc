@@ -1,0 +1,87 @@
+// === Unique AI Buy/Sell Dashboard (Enhanced Signals Both Sides) ===
+//@version=5
+indicator("Unique AI Buy/Sell Dashboard", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// === Inputs ===
+emaFastLen = input.int(9, "EMA Fast Length")
+emaSlowLen = input.int(21, "EMA Slow Length")
+atrLen     = input.int(10, "ATR Length")
+atrMult    = input.float(3.0, "ATR Multiplier")
+useRSI     = input.bool(true, "Use RSI Filter")
+rsiLen     = input.int(14, "RSI Length")
+vwapOn     = input.bool(true, "Show VWAP")
+minConfluence = input.int(3, "Min Confluence for Signal", minval=2, maxval=4)
+
+// === Color Inputs ===
+emaFastCol = input.color(color.yellow, "EMA Fast Color")
+emaSlowCol = input.color(color.purple, "EMA Slow Color")
+vwapCol    = input.color(color.teal, "VWAP Color")
+stBullCol  = input.color(color.green, "SuperTrend Bullish Color")
+stBearCol  = input.color(color.red, "SuperTrend Bearish Color")
+
+// === Background Inputs ===
+bgStyle = input.string("Auto", "Background Style", options=["Auto","Green/Red on Signal","Muted","None"])
+
+// === Calculations ===
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+rsi     = ta.rsi(close, rsiLen)
+
+// Supertrend
+[stTrend, stDir] = ta.supertrend(atrMult, atrLen)
+
+// VWAP
+vwapVal = ta.vwap(close)
+
+// Confluence
+confBuy = (emaFast > emaSlow ? 1 : 0) + (not useRSI or rsi > 50 ? 1 : 0) + (close > stTrend ? 1 : 0) + (close > vwapVal ? 1 : 0)
+confSell = (emaFast < emaSlow ? 1 : 0) + (not useRSI or rsi < 50 ? 1 : 0) + (close < stTrend ? 1 : 0) + (close < vwapVal ? 1 : 0)
+
+// Meaningful Signals: EMA crossover + Confluence Threshold
+buySignal = ta.crossover(emaFast, emaSlow) and confBuy >= minConfluence
+sellSignal = ta.crossunder(emaFast, emaSlow) and confSell >= minConfluence
+
+// Optional: Ignore consecutive same signals
+var bool lastBuy = false
+var bool lastSell = false
+if buySignal
+    if not lastBuy
+        lastBuy := true
+        lastSell := false
+    else
+        buySignal := false
+if sellSignal
+    if not lastSell
+        lastSell := true
+        lastBuy := false
+    else
+        sellSignal := false
+
+// === Plots ===
+plot(emaFast, color=emaFastCol, linewidth=2, title="EMA Fast")
+plot(emaSlow, color=emaSlowCol, linewidth=2, title="EMA Slow")
+plot(vwapVal, color=vwapCol, linewidth=2, title="VWAP")
+plot(stTrend, color=stDir == 1 ? stBullCol : stBearCol, linewidth=2, title="SuperTrend")
+
+// Enhanced Buy/Sell signals: Bigger, unique AI-style labels
+plotshape(buySignal, title="BUY", style=shape.labelup, color=color.new(color.green, 0), text="🔥 AI BUY 🔥", location=location.belowbar, size=size.large, textcolor=color.white)
+plotshape(sellSignal, title="SELL", style=shape.labeldown, color=color.new(color.red, 0), text="💥 AI SELL 💥", location=location.abovebar, size=size.large, textcolor=color.white)
+
+// === Background ===
+var color bgColor = na
+bgColor := bgStyle == "Auto" ? (buySignal ? color.new(color.green, 85) : sellSignal ? color.new(color.red, 85) : na) :
+          bgStyle == "Green/Red on Signal" ? (buySignal ? color.new(color.green, 90) : sellSignal ? color.new(color.red, 90) : na) :
+          bgStyle == "Muted" ? color.new(color.gray, 95) : na
+bgcolor(bgColor)
+
+// === Dashboard Table ===
+var table dash = table.new(position.top_right, 4, 4, border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Symbol", bgcolor=color.black, text_color=color.white)
+    table.cell(dash, 0, 1, syminfo.ticker)
+    table.cell(dash, 1, 0, "EMA Trend", bgcolor=color.black, text_color=color.white)
+    table.cell(dash, 1, 1, emaFast > emaSlow ? "Bullish" : "Bearish", text_color=emaFast > emaSlow ? emaFastCol : emaSlowCol)
+    table.cell(dash, 2, 0, "SuperTrend", bgcolor=color.black, text_color=color.white)
+    table.cell(dash, 2, 1, stDir == 1 ? "Bull" : "Bear", text_color=stDir == 1 ? stBullCol : stBearCol)
+    table.cell(dash, 3, 0, "VWAP", bgcolor=color.black, text_color=color.white)
+    table.cell(dash, 3, 1, close > vwapVal ? "Above" : "Below", text_color=close > vwapVal ? color.green : color.red)
