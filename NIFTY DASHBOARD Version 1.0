@@ -1,0 +1,403 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © ashishmishraahc - Fixed Version with MTF Size Control + Manual Background Control + SuperTrend
+
+//@version=5
+indicator("NIFTY DASHBOARD Version 1.0", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=50)
+
+// ==========================================
+// 🎨 COLOR SCHEME SETTINGS
+// ==========================================
+colorScheme = input.string("Professional", "Color Theme", options=["Professional", "Dark Modern", "Ocean Blue", "Forest Green", "Sunset Orange", "Purple Galaxy", "Classic"], group="🎨 Color Settings")
+
+// Color Functions
+f_get_colors() =>
+    var color headerBg = color.gray
+    var color tableBg = color.black
+    var color bullColor = color.green
+    var color bearColor = color.red
+    var color neutralColor = color.orange
+    var color borderColor = color.gray
+    
+    if colorScheme == "Professional"
+        headerBg := color.rgb(30, 58, 138)
+        tableBg := color.rgb(20, 20, 25)
+        bullColor := color.rgb(16, 185, 129)
+        bearColor := color.rgb(239, 68, 68)
+        neutralColor := color.rgb(245, 158, 11)
+        borderColor := color.rgb(55, 65, 81)
+    else if colorScheme == "Dark Modern"
+        headerBg := color.rgb(45, 55, 72)
+        tableBg := color.rgb(26, 32, 44)
+        bullColor := color.rgb(72, 187, 120)
+        bearColor := color.rgb(245, 101, 101)
+        neutralColor := color.rgb(237, 137, 54)
+        borderColor := color.rgb(74, 85, 104)
+    else if colorScheme == "Ocean Blue"
+        headerBg := color.rgb(15, 52, 96)
+        tableBg := color.rgb(7, 26, 48)
+        bullColor := color.rgb(59, 130, 246)
+        bearColor := color.rgb(220, 38, 38)
+        neutralColor := color.rgb(168, 85, 247)
+        borderColor := color.rgb(30, 58, 138)
+    else if colorScheme == "Forest Green"
+        headerBg := color.rgb(21, 87, 36)
+        tableBg := color.rgb(10, 43, 18)
+        bullColor := color.rgb(74, 222, 128)
+        bearColor := color.rgb(248, 113, 113)
+        neutralColor := color.rgb(253, 224, 71)
+        borderColor := color.rgb(34, 197, 94)
+    else if colorScheme == "Sunset Orange"
+        headerBg := color.rgb(124, 45, 18)
+        tableBg := color.rgb(62, 22, 9)
+        bullColor := color.rgb(251, 146, 60)
+        bearColor := color.rgb(185, 28, 28)
+        neutralColor := color.rgb(250, 204, 21)
+        borderColor := color.rgb(194, 65, 12)
+    else if colorScheme == "Purple Galaxy"
+        headerBg := color.rgb(88, 28, 135)
+        tableBg := color.rgb(44, 14, 67)
+        bullColor := color.rgb(168, 85, 247)
+        bearColor := color.rgb(239, 68, 68)
+        neutralColor := color.rgb(236, 72, 153)
+        borderColor := color.rgb(126, 34, 206)
+    else
+        headerBg := color.gray
+        tableBg := color.black
+        bullColor := color.green
+        bearColor := color.red
+        neutralColor := color.orange
+        borderColor := color.gray
+    
+    [headerBg, tableBg, bullColor, bearColor, neutralColor, borderColor]
+
+[headerBg, tableBg, bullColor, bearColor, neutralColor, borderColor] = f_get_colors()
+
+// ==========================================
+// 🔹 GENERAL SETTINGS & SIZE
+// ==========================================
+sizeInput = input.string("Normal", "Global Dashboard Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="Display Settings")
+textSize = switch sizeInput
+    "Tiny"   => size.small
+    "Small"  => size.normal
+    "Normal" => size.large
+    "Large"  => size.large
+    "Huge"   => size.huge
+    => size.large
+
+// Visual Effects
+showGradientBg = input.bool(true, "Show Gradient Background", group="Display Settings")
+showGlowEffect = input.bool(true, "Glow Effect on Signals", group="Display Settings")
+
+// ==========================================
+// 🎨 BACKGROUND COLOR TRANSPARENCY CONTROL
+// ==========================================
+bgTransparencyBuy = input.int(92, "Buy Signal Background Transparency", minval=0, maxval=100, tooltip="0 = Completely Dark, 100 = Completely Transparent", group="🎨 Background Control")
+bgTransparencySell = input.int(92, "Sell Signal Background Transparency", minval=0, maxval=100, tooltip="0 = Completely Dark, 100 = Completely Transparent", group="🎨 Background Control")
+bgTransparencyNeutral = input.int(95, "Neutral Signal Background Transparency", minval=0, maxval=100, tooltip="0 = Completely Dark, 100 = Completely Transparent", group="🎨 Background Control")
+
+// ==========================================
+// 🔹 SUPERTREND SETTINGS
+// ==========================================
+stLength = input.int(10, "SuperTrend Period", minval=1, group="SuperTrend Settings")
+stMultiplier = input.float(3.0, "SuperTrend Multiplier", minval=0.1, step=0.1, group="SuperTrend Settings")
+
+// SuperTrend Calculation (Using Built-in ta.supertrend)
+[stLine, stDir] = ta.supertrend(stMultiplier, stLength)
+stColor = stDir == -1 ? color.new(color.green, 0) : color.new(color.red, 0)
+plot(stLine, title="SuperTrend", color=stColor, linewidth=2, style=plot.style_stepline)
+
+// ==========================================
+// 🔹 SMARTSIGNAL PRO INPUTS & LOGIC
+// ==========================================
+sym1  = input.symbol("NSE:NIFTY",      "Symbol 1", group="SmartSignal Symbols")
+sym2  = input.symbol("NSE:BANKNIFTY", "Symbol 2", group="SmartSignal Symbols")
+sym3  = input.symbol("NSE:CNXFINANCE",  "Symbol 3", group="SmartSignal Symbols")
+sym4  = input.symbol("NSE:CNXIT",  "Symbol 4", group="SmartSignal Symbols")
+sym5  = input.symbol("NSE:CNXAUTO",      "Symbol 5", group="SmartSignal Symbols")
+sym6  = input.symbol("NSE:CNXENERGY",       "Symbol 6", group="SmartSignal Symbols")
+sym7  = input.symbol("NSE:CNXFMCG", "Symbol 7", group="SmartSignal Symbols")
+sym8  = input.symbol("NSE:SBIN",      "Symbol 8", group="SmartSignal Symbols")
+sym9  = input.symbol("NSE:HDFCBANK",       "Symbol 9", group="SmartSignal Symbols")
+sym10 = input.symbol("NSE:ICICIBANK",  "Symbol 10", group="SmartSignal Symbols")
+
+// Chart Data
+chartSym = syminfo.tickerid
+[ema9, ema15, vwap, closePrice] = request.security(chartSym, timeframe.period, [ta.ema(close, 9), ta.ema(close, 15), ta.vwap, close])
+
+// Plot EMA + VWAP
+ema9Color = ema9 > ema15 ? bullColor : bearColor
+ema15Color = ema9 < ema15 ? bearColor : bullColor
+plot(ema9,  title="EMA 9",  color=ema9Color, linewidth=2)
+plot(ema15, title="EMA 15", color=ema15Color, linewidth=2)
+plot(vwap,  title="VWAP",   color=color.new(color.aqua, 30), linewidth=2, style=plot.style_circles)
+
+// Buy / Sell Arrows
+buyCond  = ta.crossover(ema9, ema15)
+sellCond = ta.crossunder(ema9, ema15)
+var string lastSignal = "NONE"
+
+if buyCond and lastSignal != "BUY"
+    lastSignal := "BUY"
+    label.new(bar_index, low, "🚀 BUY", color=bullColor, style=label.style_label_up, textcolor=color.white, size=size.normal)
+
+if sellCond and lastSignal != "SELL"
+    lastSignal := "SELL"
+    label.new(bar_index, high, "🔻 SELL", color=bearColor, style=label.style_label_down, textcolor=color.white, size=size.normal)
+
+// === SmartSignal Dashboard Table ===
+var table dash = table.new(position.top_right, 9, 12, border_width=2, border_color=borderColor, frame_width=3, frame_color=borderColor)
+
+if barstate.isfirst
+    table.cell(dash, 0, 0, "📊 SYMBOL",   text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 1, 0, "💰 LTP",      text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 2, 0, "📈 CHANGE", text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 3, 0, "⚡ RSI",      text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 4, 0, "🎯 LEVEL",    text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 5, 0, "📊 TREND",    text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 6, 0, "🔄 EMA", text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 7, 0, "💎 VWAP",     text_color=color.white, bgcolor=headerBg, text_size=textSize)
+    table.cell(dash, 8, 0, "🎲 SIGNAL",    text_color=color.white, bgcolor=headerBg, text_size=textSize)
+
+// Reset counters
+var int buyCount = 0
+var int sellCount = 0
+var int neutralCount = 0
+buyCount := 0
+sellCount := 0
+neutralCount := 0
+
+// Function to Fill Row - FIXED LEVEL LOGIC
+f_fill_row(row, sym) =>
+    [cur, e9, e15, vwp] = request.security(sym, timeframe.period, [close, ta.ema(close, 9), ta.ema(close, 15), ta.vwap])
+    [prevClose, prevHigh, prevLow] = request.security(sym, "D", [close[1], high[1], low[1]])
+
+    chg = (na(prevClose) or prevClose == 0) ? na : ((cur - prevClose) / prevClose) * 100
+    chgColor = (not na(chg) and chg >= 0) ? color.rgb(16, 185, 129) : color.rgb(239, 68, 68)
+    rsi = na(cur) ? na : ta.rsi(cur, 14)
+
+    trendBull = e9 > e15
+    trend_txt  = trendBull ? "🟢 UP" : "🔴 DOWN"
+    trendColor = trendBull ? color.rgb(16, 185, 129) : color.rgb(239, 68, 68)
+
+    // FIXED LEVEL LOGIC
+    lvl = "Inside"
+    sig = "Range"
+    sigColor = color.rgb(245, 158, 11)
+    
+    if not na(prevHigh) and not na(prevLow) and not na(cur)
+        if cur > prevHigh
+            lvl := "Above PDH"
+            sig := "Breakout ↑"
+            sigColor := color.rgb(16, 185, 129)
+        else if cur < prevLow
+            lvl := "Below PDL"
+            sig := "Breakdown ↓"
+            sigColor := color.rgb(239, 68, 68)
+
+    emaSig = e9 > e15 ? "BUY" : e9 < e15 ? "SELL" : "HOLD"
+    emaColor = e9 > e15 ? color.rgb(16, 185, 129) : e9 < e15 ? color.rgb(239, 68, 68) : color.rgb(245, 158, 11)
+    vwapColor = cur > vwp ? color.rgb(34, 197, 94) : cur < vwp ? color.rgb(220, 38, 38) : color.rgb(107, 114, 128)
+
+    // Final Signal logic
+    finalSig = "HOLD"
+    if sig == "Breakout ↑" and emaSig == "BUY"
+        finalSig := "BUY"
+    else if sig == "Breakdown ↓" and emaSig == "SELL"
+        finalSig := "SELL"
+    else if emaSig == "BUY"
+        finalSig := "BUY"
+    else if emaSig == "SELL"
+        finalSig := "SELL"
+
+    finalColor = finalSig == "BUY" ? color.rgb(16, 185, 129) : finalSig == "SELL" ? color.rgb(239, 68, 68) : color.rgb(156, 163, 175)
+
+    rsiBg = na(rsi) ? tableBg : rsi > 70 ? color.rgb(239, 68, 68) : rsi < 30 ? color.rgb(16, 185, 129) : color.rgb(107, 114, 128)
+
+    table.cell(dash, 0, row, str.replace_all(sym, "NSE:", ""), text_color=color.white, bgcolor=tableBg, text_size=textSize)
+    table.cell(dash, 1, row, na(cur) ? "-" : str.tostring(cur, format.mintick), text_color=color.white, bgcolor=tableBg, text_size=textSize)
+    table.cell(dash, 2, row, na(chg) ? "-" : str.tostring(chg, "#.##") + "%", text_color=color.white, bgcolor=chgColor, text_size=textSize)
+    table.cell(dash, 3, row, na(rsi) ? "-" : str.tostring(rsi, "#.#"), text_color=color.white, bgcolor=rsiBg, text_size=textSize)
+    table.cell(dash, 4, row, lvl, text_color=color.white, bgcolor=sigColor, text_size=textSize)
+    table.cell(dash, 5, row, trend_txt, text_color=color.white, bgcolor=trendColor, text_size=textSize)
+    table.cell(dash, 6, row, emaSig, text_color=color.white, bgcolor=emaColor, text_size=textSize)
+    table.cell(dash, 7, row, na(vwp) ? "-" : str.tostring(vwp, format.mintick), text_color=color.white, bgcolor=vwapColor, text_size=textSize)
+    table.cell(dash, 8, row, finalSig, text_color=color.white, bgcolor=finalColor, text_size=textSize)
+    finalSig
+
+s1 = f_fill_row(1, sym1)
+s2 = f_fill_row(2, sym2)
+s3 = f_fill_row(3, sym3)
+s4 = f_fill_row(4, sym4)
+s5 = f_fill_row(5, sym5)
+s6 = f_fill_row(6, sym6)
+s7 = f_fill_row(7, sym7)
+s8 = f_fill_row(8, sym8)
+s9 = f_fill_row(9, sym9)
+s10 = f_fill_row(10, sym10)
+
+// Update Sentiment Counts
+for s in array.from(s1,s2,s3,s4,s5,s6,s7,s8,s9,s10)
+    if s == "BUY"
+        buyCount += 1
+    else if s == "SELL"
+        sellCount += 1
+    else
+        neutralCount += 1
+
+// === Market Sentiment Bar ===
+marketSentiment = buyCount > sellCount ? "NIFTY Sentiments: Bullish" : sellCount > buyCount ? "NIFTY Sentiments: Bearish" : "NIFTY Sentiments: Neutral"
+sentimentColor = buyCount > sellCount ? bullColor : sellCount > buyCount ? bearColor : neutralColor
+sentimentText = marketSentiment + "  |  Buy: " + str.tostring(buyCount) + " | Sell: " + str.tostring(sellCount)
+
+table.merge_cells(dash, 0, 11, 8, 11)
+table.cell(dash, 0, 11, sentimentText, text_color=color.white, bgcolor=sentimentColor, text_size=textSize)
+
+// ==========================================
+// 🔹 MTF TREND DASHBOARD
+// ==========================================
+mtfMaLen = input.int(50, "MTF Trend EMA Length", group="MTF Dashboard Settings")
+mtfPosStr = input.string("Bottom Right", "MTF Position", options=["Top Right", "Bottom Right", "Middle Right","Middle Top"], group="MTF Dashboard Settings")
+mtfSizeInput = input.string("Small", "MTF Dashboard Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="MTF Dashboard Settings")
+
+mtfTextSize = switch mtfSizeInput
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+    "Huge"   => size.huge
+    => size.small
+
+mtfPos = switch mtfPosStr
+    "Top Right"    => position.top_right
+    "Bottom Right" => position.bottom_right
+    "Middle Right" => position.middle_right
+    "Middle Top" => position.top_center
+    => position.bottom_right
+
+var table mtfDash = table.new(mtfPos, 2, 11, border_width=2, border_color=borderColor, frame_width=3, frame_color=borderColor)
+
+if barstate.isfirst
+    table.cell(mtfDash, 0, 0, "⏰ T FRAME", text_color=color.white, bgcolor=headerBg, text_size=mtfTextSize)
+    table.cell(mtfDash, 1, 0, "📊 TREND",     text_color=color.white, bgcolor=headerBg, text_size=mtfTextSize)
+
+f_get_mtf_trend(tf) =>
+    [c_mtf, ema_mtf] = request.security(syminfo.tickerid, tf, [close, ta.ema(close, mtfMaLen)])
+    c_mtf > ema_mtf
+
+f_fill_mtf_row(row, tf, dispName) =>
+    isBull = f_get_mtf_trend(tf)
+    table.cell(mtfDash, 0, row, dispName, text_color=color.white, bgcolor=tableBg, text_size=mtfTextSize, text_halign=text.align_left)
+    trendText = isBull ? "Bullish" : "Bearish"
+    trendColor = isBull ? color.rgb(16, 185, 129) : color.rgb(239, 68, 68)
+    table.cell(mtfDash, 1, row, trendText, text_color=color.white, bgcolor=trendColor, text_size=mtfTextSize)
+
+if barstate.islast
+    f_fill_mtf_row(1,  "1",   "1 Min")
+    f_fill_mtf_row(2,  "3",   "3 Min")
+    f_fill_mtf_row(3,  "5",   "5 Min")
+    f_fill_mtf_row(4,  "15",  "15 Min")
+    f_fill_mtf_row(5,  "30",  "30 Min")
+    f_fill_mtf_row(6,  "45",  "45 Min")
+    f_fill_mtf_row(7,  "60",  "1 Hr")
+    f_fill_mtf_row(8,  "240", "4 Hr")
+    f_fill_mtf_row(9,  "D",   "1 Day")
+    f_fill_mtf_row(10, "W",   "1 Week")
+
+// ==========================================
+// 🔹 CHART PLOTS - PDH/PDL WITH LABELS
+// ==========================================
+[pdh_chart, pdl_chart] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+finalSigChart = "⚖️ NEUTRAL"
+if (not na(closePrice)) and (not na(pdh_chart)) and (not na(pdl_chart))
+    if (closePrice >= pdh_chart) and (ema9 > ema15)
+        finalSigChart := "🔥 BUY"
+    else if (closePrice <= pdl_chart) and (ema9 < ema15)
+        finalSigChart := "❌ SELL"
+
+// Gradient Background with Manual Transparency Control
+bgcolor(showGradientBg and finalSigChart == "🔥 BUY" ? color.new(bullColor, bgTransparencyBuy) : showGradientBg and finalSigChart == "❌ SELL" ? color.new(bearColor, bgTransparencySell) : showGradientBg ? color.new(neutralColor, bgTransparencyNeutral) : na, title="Signal Background")
+
+// PDH/PDL LINES WITH VALUES
+pdhColor = showGlowEffect ? color.new(bullColor, 0) : color.new(color.green, 30)
+pdlColor = showGlowEffect ? color.new(bearColor, 0) : color.new(color.red, 30)
+
+pdhPlot = plot(pdh_chart, title="📈 PDH", color=pdhColor, linewidth=3)
+pdlPlot = plot(pdl_chart, title="📉 PDL", color=pdlColor, linewidth=3)
+
+// PDH/PDL LABELS
+var label pdhLabel = na
+var label pdlLabel = na
+
+if barstate.islast and not na(pdh_chart)
+    if na(pdhLabel)
+        pdhLabel := label.new(bar_index, pdh_chart, "📈 PDH: " + str.tostring(pdh_chart, format.mintick), 
+                              xloc=xloc.bar_index, 
+                              style=label.style_label_left, 
+                              color=color.new(bullColor, 20), 
+                              textcolor=color.white, 
+                              size=size.normal)
+    else
+        label.set_xy(pdhLabel, bar_index, pdh_chart)
+        label.set_text(pdhLabel, "📈 PDH: " + str.tostring(pdh_chart, format.mintick))
+
+if barstate.islast and not na(pdl_chart)
+    if na(pdlLabel)
+        pdlLabel := label.new(bar_index, pdl_chart, "📉 PDL: " + str.tostring(pdl_chart, format.mintick), 
+                              xloc=xloc.bar_index, 
+                              style=label.style_label_left, 
+                              color=color.new(bearColor, 20), 
+                              textcolor=color.white, 
+                              size=size.normal)
+    else
+        label.set_xy(pdlLabel, bar_index, pdl_chart)
+        label.set_text(pdlLabel, "📉 PDL: " + str.tostring(pdl_chart, format.mintick))
+
+// EMA200
+ema200 = ta.ema(close, 200)
+ema200Color = close > ema200 ? color.new(bullColor, 40) : color.new(bearColor, 40)
+plot(ema200, title="📊 EMA200", color=ema200Color, linewidth=3)
+
+// RSI Labels
+rsiLength = input.int(14, "RSI Length", group="RSI Settings")
+rsi_val = ta.rsi(close, rsiLength)
+if ta.crossover(rsi_val, 70)
+    label.new(bar_index, high + ta.atr(5) * 0.0, "⚠️ OB", xloc=xloc.bar_index, style=label.style_label_down, color=bearColor, textcolor=color.white, size=size.small)
+if ta.crossunder(rsi_val, 28)
+    label.new(bar_index, low - ta.atr(5) * 0.0, "💎 OS", xloc=xloc.bar_index, style=label.style_label_up, color=bullColor, textcolor=color.white, size=size.small)
+
+// ==========================================
+// 🔹 SUPPORT & RESISTANCE BOXES
+// ==========================================
+tf_sr = input.timeframe("30", "S&R Timeframe", group="🎯 Support & Resistance")
+maxLevels = input.int(2, "Number of Levels", minval=1, maxval=10, group="🎯 Support & Resistance")
+boxHeightMulti = input.float(0.1, "Box Thickness", minval=0.01, step=0.05, group="🎯 Support & Resistance")
+boxTransparency = input.int(85, "Box Transparency", minval=0, maxval=100, group="🎯 Support & Resistance")
+
+[h30, l30, c30, atr30] = request.security(syminfo.tickerid, tf_sr, [high, low, close, ta.atr(14)])
+
+leftBars = 10
+rightBars = 10
+ph = ta.pivothigh(h30, leftBars, rightBars)
+pl = ta.pivotlow(l30, leftBars, rightBars)
+
+var box[] resBoxes = array.new_box()
+var box[] supBoxes = array.new_box()
+
+thickness = atr30 * boxHeightMulti
+
+// Resistance Box
+if not na(ph)
+    newBox = box.new(bar_index[rightBars] - 500, ph, bar_index + 100, ph - thickness, border_color=bearColor, bgcolor=color.new(bearColor, boxTransparency), border_width=2, extend=extend.both, text="🔴 RESISTANCE", text_color=color.red, text_size=size.normal)
+    array.push(resBoxes, newBox)
+    if array.size(resBoxes) > maxLevels
+        oldest = array.shift(resBoxes)
+        box.delete(oldest)
+
+// Support Box
+if not na(pl)
+    newBox = box.new(bar_index[rightBars] - 500, pl + thickness, bar_index + 100, pl, border_color=bullColor, bgcolor=color.new(bullColor, boxTransparency), border_width=2, extend=extend.both, text="🟢 SUPPORT", text_color=color.green, text_size=size.normal)
+    array.push(supBoxes, newBox)
+    if array.size(supBoxes) > maxLevels
+        oldest = array.shift(supBoxes)
+        box.delete(oldest)
